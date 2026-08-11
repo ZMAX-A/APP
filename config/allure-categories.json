@@ -1,0 +1,22 @@
+[
+  {
+    "name": "业务断言失败",
+    "matchedStatuses": ["failed"],
+    "messageRegex": ".*(AssertionError|ExcelCaseExecutionError).*"
+  },
+  {
+    "name": "定位器或等待超时",
+    "matchedStatuses": ["failed", "broken"],
+    "traceRegex": ".*(TimeoutException|LocatorFormatError|NoSuchElement).*"
+  },
+  {
+    "name": "设备或 Appium 基础设施",
+    "matchedStatuses": ["failed", "broken"],
+    "traceRegex": ".*(InvalidSessionId|NoSuchDriver|WebDriverException|UiAutomator2|Connection).*"
+  },
+  {
+    "name": "Excel 或环境配置",
+    "matchedStatuses": ["broken"],
+    "traceRegex": ".*(WorkbookFormatError|VariableResolutionError|ValueError).*"
+  }
+]

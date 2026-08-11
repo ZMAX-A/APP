@@ -1,0 +1,65 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "yanjia-android-automation"
+version = "0.1.0"
+description = "Black-box Android automation for the YanJia AI tablet application"
+readme = "README.md"
+requires-python = ">=3.12,<4"
+dependencies = [
+    "Appium-Python-Client==5.3.1",
+    "allure-pytest>=2.13,<3",
+    "python-dotenv>=1.0,<2",
+    "pytest>=7.4,<10",
+]
+
+[project.optional-dependencies]
+dev = [
+    "openpyxl>=3.1,<4",
+    "pyright>=1.1,<2",
+    "ruff>=0.12,<1",
+]
+parallel = [
+    "pytest-xdist>=3.6,<4",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-markers"
+pythonpath = ["src"]
+testpaths = ["tests/excel"]
+markers = [
+    "case_id(*ids): source case IDs from test_case.xlsx",
+    "p0: release-blocking priority",
+    "p1: important regression priority",
+    "p2: extended priority",
+    "p3: low priority",
+    "smoke: short release-gate suite",
+    "regression: regular regression suite",
+    "extended: slow or environment-sensitive suite",
+    "readonly: test does not intentionally change server data",
+    "mutating: test changes data and requires explicit authorization",
+    "destructive: test deletes data and requires explicit authorization",
+    "requires_auth: test requires a valid test account",
+    "requires_seed: test depends on controlled seed data",
+    "tablet: test is designed for the Android tablet layout",
+    "serial: test must not share data or a device with another worker",
+    "excel_driven: test case and steps are loaded from the Excel workbook",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.pyright]
+pythonVersion = "3.12"
+typeCheckingMode = "basic"
+include = ["src", "tests", "scripts"]
+extraPaths = ["src"]

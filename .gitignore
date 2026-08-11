@@ -1,0 +1,43 @@
+# Local credentials and overrides
+.env
+env.txt
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+*.egg-info/
+
+# Test output and device captures
+artifacts/
+reports/
+allure-results/
+allure-report/
+*.log
+
+# App binaries
+apps/
+*.apk
+*.apks
+*.aab
+
+# Local inspection captures
+*_page.xml
+customer_*.xml
+image_viewer*.xml
+profile_page.xml
+settings_page.xml
+case_page.xml
+yanjia_*.png
+yanjia_*.jpg
+yanjia_*.xml
+
+# Editors and operating systems
+.idea/
+.vscode/*
+!.vscode/settings.json
+.DS_Store
+Thumbs.db
