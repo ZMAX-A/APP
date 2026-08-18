@@ -8,6 +8,11 @@ from openpyxl import load_workbook
 from openpyxl.worksheet.worksheet import Worksheet
 
 from yanjia_automation.excel.models import ExcelCase, ExcelStep
+from yanjia_automation.excel.single_sheet import (
+    SINGLE_SHEET_REQUIRED_HEADERS,
+    SingleSheetMigrationError,
+    load_android_login_cases,
+)
 
 CASE_SHEET = "自动化测试用例"
 STEP_SHEET = "自动化执行步骤"
@@ -67,9 +72,22 @@ class ExcelCaseRepository:
             if CASE_SHEET not in workbook.sheetnames:
                 raise WorkbookFormatError(f"缺少工作表：{CASE_SHEET}")
             if STEP_SHEET not in workbook.sheetnames:
-                raise WorkbookFormatError(
-                    f"缺少工作表：{STEP_SHEET}。请先运行 scripts/prepare-excel.ps1。"
-                )
+                case_sheet = workbook[CASE_SHEET]
+                try:
+                    case_headers = _headers(case_sheet, SINGLE_SHEET_REQUIRED_HEADERS)
+                    cases = load_android_login_cases(
+                        case_sheet,
+                        case_headers,
+                        case_patterns=case_patterns,
+                    )
+                except SingleSheetMigrationError as error:
+                    raise WorkbookFormatError(str(error)) from error
+                selected = [case for case in cases if case.enabled]
+                if not selected:
+                    raise WorkbookFormatError(
+                        "Excel筛选结果为空：没有找到已启用且符合条件的 Android 用例"
+                    )
+                return selected
 
             case_sheet = workbook[CASE_SHEET]
             step_sheet = workbook[STEP_SHEET]

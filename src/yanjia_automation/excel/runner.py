@@ -21,7 +21,8 @@ from yanjia_automation.excel.locators import (
 from yanjia_automation.excel.models import ExcelCase, ExcelStep
 from yanjia_automation.excel.variables import VariableResolver
 from yanjia_automation.flows.navigation import ensure_home
-from yanjia_automation.flows.recovery import restart_to_home
+from yanjia_automation.flows.recovery import restart_to_home, restart_to_login
+from yanjia_automation.screens.login import LoginScreen
 
 ASSERTION_NAMES = {
     "activity_equals",
@@ -59,6 +60,8 @@ SUPPORTED_ACTIONS = {
     "pause",
     "press_keycode",
     "restart_to_home",
+    "restart_to_login",
+    "select_first_store",
     "scroll_to_text",
     "set_orientation",
     "swipe",
@@ -166,6 +169,8 @@ class ExcelCaseRunner:
             "pause": self._pause,
             "press_keycode": self._press_keycode,
             "restart_to_home": self._restart_to_home,
+            "restart_to_login": self._restart_to_login,
+            "select_first_store": self._select_first_store,
             "scroll_to_text": self._scroll_to_text,
             "set_orientation": self._set_orientation,
             "swipe": self._swipe,
@@ -191,6 +196,12 @@ class ExcelCaseRunner:
 
     def _restart_to_home(self, case: ExcelCase, step: ExcelStep) -> None:
         restart_to_home(self.driver, self.settings)
+
+    def _restart_to_login(self, case: ExcelCase, step: ExcelStep) -> None:
+        restart_to_login(self.driver, self.settings)
+
+    def _select_first_store(self, case: ExcelCase, step: ExcelStep) -> None:
+        LoginScreen(self.driver).select_first_store(timeout=step.timeout)
 
     def _ensure_home(self, case: ExcelCase, step: ExcelStep) -> None:
         ensure_home(self.driver, self.settings)

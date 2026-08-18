@@ -55,8 +55,17 @@ def excel_run_id(pytestconfig: pytest.Config) -> str:
 
 
 @pytest.fixture(scope="session")
-def excel_variables(settings: Settings, excel_run_id: str) -> VariableResolver:
-    return VariableResolver.from_settings(settings, run_id=excel_run_id)
+def excel_variables(
+    settings: Settings,
+    excel_run_id: str,
+    pytestconfig: pytest.Config,
+) -> VariableResolver:
+    cases = pytestconfig.stash.get(EXCEL_CASES_KEY, ())
+    return VariableResolver.from_settings(
+        settings,
+        run_id=excel_run_id,
+        require_credentials=_cases_require_credentials(cases),
+    )
 
 
 @pytest.fixture(scope="session")
@@ -102,3 +111,19 @@ def _option_text(
 ) -> str | None:
     value: object = config.getoption(name)
     return value if isinstance(value, str) else default
+
+
+def _cases_require_credentials(cases: tuple[ExcelCase, ...]) -> bool:
+    credential_names = (
+        "YANJIA_USERNAME",
+        "YANJIA_PASSWORD",
+        "TEST_USERNAME",
+        "TEST_PASSWORD",
+    )
+    markers = tuple(f"${{{name}}}" for name in credential_names)
+    for case in cases:
+        values = [case.input_data]
+        values.extend(step.input_value for step in case.steps)
+        if any(marker in (value or "") for value in values for marker in markers):
+            return True
+    return False

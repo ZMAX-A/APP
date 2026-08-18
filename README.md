@@ -56,6 +56,8 @@ YANJIA_STORE_NAME=
 ANDROID_UDID=
 ```
 
+门店选择规则：`YANJIA_STORE_NAME` 填了门店名就直接使用该门店；留空时，运行时会在终端列出 App 返回的所有门店，输入序号选择（非交互环境如 CI 中自动选择第一个）。
+
 `env.txt`、`.env`、报告、截图、APK 均已加入 `.gitignore`。程序缺少凭据时只报告缺失键，不回显值。
 
 ## 安装 Python 依赖
@@ -75,6 +77,15 @@ python -m pip install -e ".[dev]"
 ```powershell
 .\scripts\start-appium.ps1
 ```
+
+部分小米/HyperOS 设备在辅助包已安装后，仍会拦截 Appium Settings 服务的重复初始化。确认以下三个官方辅助包已成功安装后，可以在本地 `.env` 中启用：
+
+```dotenv
+APPIUM_SKIP_DEVICE_INITIALIZATION=true
+APPIUM_SKIP_SERVER_INSTALLATION=true
+```
+
+这两个开关默认关闭；新设备首次运行时应保持关闭，以便 Appium 完成设备初始化和版本检查。
 
 运行 Excel 中所有 `是否执行=是` 的用例，并将结果直接写回原工作簿：
 
@@ -109,6 +120,14 @@ python -m pip install -e ".[dev]"
 .\scripts\run-excel.ps1 -CaseId "TC-HOME-*"
 .\scripts\run-excel.ps1 -Tags "smoke,readonly" -RunSeeded
 ```
+
+如果使用更新后的单表 Web/Playwright 用例文件，当前仅支持已迁移的 Android 登录用例：
+
+```powershell
+.\scripts\run-excel.ps1 -CaseId "TC-LOGIN-001,TC-LOGIN-002,TC-LOGIN-003" -NoWriteBack
+```
+
+单表中的 CSS 定位器和 URL 断言不会直接用于原生 Android；执行器会将已支持的登录用例映射为真实 resource-id 和 Activity。未选择用例时会拒绝执行，以免误把 Web 用例当成 Android 用例。
 
 运行后立即打开报告：
 

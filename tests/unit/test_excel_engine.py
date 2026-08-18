@@ -11,6 +11,8 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.worksheet.worksheet import Worksheet
 from selenium.common.exceptions import InvalidSessionIdException
 
+import yanjia_automation.config as config_module
+from yanjia_automation.config import Settings, load_settings
 from yanjia_automation.driver import is_recoverable_driver_error
 from yanjia_automation.excel.locators import (
     LocatorFormatError,
@@ -34,6 +36,82 @@ def test_repository_loads_enabled_case_and_ordered_steps(tmp_path: Path) -> None
     assert cases[0].tags == ("smoke", "readonly")
 
 
+def test_repository_migrates_targeted_single_sheet_android_login_case(
+    tmp_path: Path,
+) -> None:
+    workbook_path = tmp_path / "single-sheet.xlsx"
+    workbook = Workbook()
+    sheet = cast(Worksheet, workbook.active)
+    sheet.title = "自动化测试用例"
+    sheet.append(
+        (
+            "用例ID",
+            "模块",
+            "测试场景",
+            "测试点",
+            "优先级",
+            "前置条件",
+            "操作步骤",
+            "元素定位器",
+            "操作类型",
+            "输入数据",
+            "数据类型",
+            "期望结果",
+            "验证点",
+            "断言类型",
+            "超时(秒)",
+            "备注",
+            "实际结果",
+            "是否执行",
+            "执行分组",
+        )
+    )
+    sheet.append(
+        (
+            "TC-LOGIN-001",
+            "账号登录",
+            "登录失败-错误账号",
+            "验证错误账号登录提示",
+            "P0",
+            "打开登录页面",
+            "输入账号并提交",
+            "#username, #password",
+            "input,input,click",
+            "invalid-account|${TEST_PASSWORD}",
+            "string",
+            "提示：登录失败，请重试！",
+            "错误提示可见",
+            "text_contains",
+            5,
+            "",
+            "NOT_RUN",
+            "是",
+            "B",
+        )
+    )
+    workbook.save(workbook_path)
+    workbook.close()
+
+    cases = ExcelCaseRepository(workbook_path).load_cases(
+        case_patterns=("TC-LOGIN-001",)
+    )
+
+    assert [case.case_id for case in cases] == ["TC-LOGIN-001"]
+    assert [step.action for step in cases[0].steps] == [
+        "restart_to_login",
+        "input",
+        "input",
+        "click",
+        "assert",
+    ]
+    assert cases[0].steps[1].locator == (
+        "id=com.xiaofutech.yanjia_ai:id/login_username_et"
+    )
+    assert cases[0].steps[-1].locator == (
+        "id=com.xiaofutech.yanjia_ai:id/cover_prompt_cl"
+    )
+
+
 def test_variable_resolution_and_redaction() -> None:
     resolver = VariableResolver(
         {"NAME": "演示顾客", "PASSWORD": "secret-value"},
@@ -43,6 +121,60 @@ def test_variable_resolution_and_redaction() -> None:
     assert resolver.resolve("你好，${NAME}") == "你好，演示顾客"
     assert resolver.resolve("<EMPTY>") == ""
     assert resolver.redact("password=secret-value") == "password=***"
+
+
+def test_variable_resolver_inherits_credentials_for_empty_test_aliases(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        config_module,
+        "_DOTENV",
+        {
+            "YANJIA_USERNAME": "android-user",
+            "YANJIA_PASSWORD": "android-password",
+            "TEST_USERNAME": "",
+            "TEST_PASSWORD": "",
+        },
+    )
+    for name in (
+        "YANJIA_USERNAME",
+        "YANJIA_PASSWORD",
+        "TEST_USERNAME",
+        "TEST_PASSWORD",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    settings = Settings(
+        appium_server_url="http://127.0.0.1:4723",
+        app_package="com.xiaofutech.yanjia_ai",
+        app_activity=".activity.SplashActivity",
+        udid="device",
+        store_name=None,
+        no_reset=True,
+        run_seeded=False,
+        allow_mutation=False,
+        allow_destructive=False,
+        capture_sensitive_artifacts=False,
+        skip_device_initialization=True,
+        skip_server_installation=True,
+    )
+
+    resolver = VariableResolver.from_settings(settings, run_id="test")
+
+    assert resolver.resolve("${TEST_USERNAME}") == "android-user"
+    assert resolver.resolve("${TEST_PASSWORD}") == "android-password"
+
+
+def test_offline_variable_resolver_does_not_require_credentials(tmp_path: Path) -> None:
+    settings = replace(load_settings(), project_root=tmp_path)
+
+    resolver = VariableResolver.from_settings(
+        settings,
+        run_id="VALIDATION",
+        require_credentials=False,
+    )
+
+    assert resolver.resolve("${RUN_ID}") == "VALIDATION"
 
 
 def test_locator_parser() -> None:

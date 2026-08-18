@@ -123,7 +123,11 @@ catch {
 
 try {
     Write-Host '正在离线校验 Excel 用例...'
-    & $python (Join-Path $PSScriptRoot 'validate_excel.py') $excelPath
+    $validationArguments = @($excelPath)
+    if ($CaseId) {
+        $validationArguments += @('--case-id', $CaseId)
+    }
+    & $python (Join-Path $PSScriptRoot 'validate_excel.py') @validationArguments
     if ($LASTEXITCODE -ne 0) {
         throw "Excel validation failed with exit code $LASTEXITCODE."
     }

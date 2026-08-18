@@ -24,6 +24,11 @@ def create_driver(settings: Settings) -> WebDriver:
     options.no_reset = settings.no_reset
     options.auto_grant_permissions = True
     options.new_command_timeout = 180
+    options.set_capability("appium:adbExecTimeout", 60000)
+    if settings.skip_device_initialization:
+        options.set_capability("appium:skipDeviceInitialization", True)
+    if settings.skip_server_installation:
+        options.set_capability("appium:skipServerInstallation", True)
     options.set_capability("appium:appWaitActivity", "*")
     options.set_capability("appium:forceAppLaunch", True)
     options.set_capability("appium:disableWindowAnimation", True)

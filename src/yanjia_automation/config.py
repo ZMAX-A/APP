@@ -33,11 +33,13 @@ class Settings:
     allow_mutation: bool
     allow_destructive: bool
     capture_sensitive_artifacts: bool
+    skip_device_initialization: bool
+    skip_server_installation: bool
     project_root: Path = PROJECT_ROOT
 
     def credentials(self) -> Credentials:
-        username = _setting("YANJIA_USERNAME")
-        password = _setting("YANJIA_PASSWORD")
+        username = _setting("YANJIA_USERNAME") or _setting("TEST_USERNAME")
+        password = _setting("YANJIA_PASSWORD") or _setting("TEST_PASSWORD")
         if username and password:
             return Credentials(username=username, password=password)
 
@@ -105,5 +107,11 @@ def load_settings() -> Settings:
         allow_destructive=_as_bool(_setting("YANJIA_ALLOW_DESTRUCTIVE")),
         capture_sensitive_artifacts=_as_bool(
             _setting("YANJIA_CAPTURE_SENSITIVE_ARTIFACTS")
+        ),
+        skip_device_initialization=_as_bool(
+            _setting("APPIUM_SKIP_DEVICE_INITIALIZATION")
+        ),
+        skip_server_installation=_as_bool(
+            _setting("APPIUM_SKIP_SERVER_INSTALLATION")
         ),
     )

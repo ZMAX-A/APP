@@ -22,7 +22,13 @@ class VariableResolver:
         self._sensitive_values = {value for value in sensitive_values if value}
 
     @classmethod
-    def from_settings(cls, settings: Settings, *, run_id: str) -> VariableResolver:
+    def from_settings(
+        cls,
+        settings: Settings,
+        *,
+        run_id: str,
+        require_credentials: bool = True,
+    ) -> VariableResolver:
         values: dict[str, str] = {
             key: str(value)
             for key, value in dotenv_values(settings.project_root / ".env").items()
@@ -39,9 +45,23 @@ class VariableResolver:
             }
         )
 
-        credentials = settings.credentials()
-        values.setdefault("YANJIA_USERNAME", credentials.username)
-        values.setdefault("YANJIA_PASSWORD", credentials.password)
+        try:
+            credentials = settings.credentials()
+        except RuntimeError:
+            if require_credentials:
+                raise
+        else:
+            credential_aliases = {
+                "YANJIA_USERNAME": credentials.username,
+                "YANJIA_PASSWORD": credentials.password,
+                "TEST_USERNAME": credentials.username,
+                "TEST_PASSWORD": credentials.password,
+            }
+            for name, value in credential_aliases.items():
+                # The example .env deliberately includes blank TEST_* keys.
+                # Treat blanks as unset so migrated cases inherit YANJIA_*.
+                if not values.get(name, "").strip():
+                    values[name] = value
 
         sensitive_values = {
             value

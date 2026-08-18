@@ -1,5 +1,6 @@
 ﻿param(
-    [string]$Workbook = "test_case.xlsx"
+    [string]$Workbook = "test_case.xlsx",
+    [string]$CaseId
 )
 
 $ErrorActionPreference = 'Stop'
@@ -22,7 +23,11 @@ else {
     [System.IO.Path]::GetFullPath((Join-Path $projectRoot $Workbook))
 }
 
-& $python (Join-Path $PSScriptRoot 'validate_excel.py') $workbookPath
+$validationArguments = @($workbookPath)
+if ($CaseId) {
+    $validationArguments += @('--case-id', $CaseId)
+}
+& $python (Join-Path $PSScriptRoot 'validate_excel.py') @validationArguments
 if ($LASTEXITCODE -ne 0) {
     throw "Excel validation failed with exit code $LASTEXITCODE."
 }

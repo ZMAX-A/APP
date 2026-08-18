@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sys
+
 from selenium.webdriver.support.ui import WebDriverWait
 
 from yanjia_automation.config import Credentials
@@ -12,9 +14,26 @@ class LoginScreen(BaseScreen):
     password = resource_id("login_pwd_et")
     submit = resource_id("login_tv")
     store_list = resource_id("login_store_rv")
+    store_overlay = resource_id("login_store_v")
     store_names = resource_id("a_login_store_tv")
     enter_store_buttons = resource_id("a_login_join_tv")
+    error_dialog = resource_id("cover_prompt_cl")
+    error_message = resource_id("cover_prompt_desc_tv")
     error_confirm = resource_id("cover_prompt_v1_tv")
+    protocol = resource_id("login_protocol_tv")
+
+    def clear_form(self) -> None:
+        self.find(self.username).clear()
+        self.find(self.password).clear()
+
+    def select_first_store(self, timeout: float = 20) -> None:
+        WebDriverWait(self.driver, timeout).until(
+            lambda _: self.is_visible(self.store_list, timeout=0.2)
+        )
+        buttons = WebDriverWait(self.driver, timeout).until(
+            lambda _: self.find_all(self.enter_store_buttons) or False
+        )
+        buttons[0].click()
 
     def sign_in(self, credentials: Credentials, store_name: str | None = None) -> None:
         if self.is_visible(self.error_confirm, timeout=0.5):
@@ -52,5 +71,25 @@ class LoginScreen(BaseScreen):
             if not matches:
                 raise AssertionError("Configured store was not present in the store picker")
             index = matches[0]
+        elif len(buttons) > 1 and sys.stdin.isatty():
+            index = self._choose_store_interactively()
 
         buttons[index].click()
+
+    def _choose_store_interactively(self) -> int:
+        """在终端列出门店列表，让用户输入序号选择，返回门店索引。"""
+        stores = self.find_all(self.store_names)
+        print("\n发现以下门店：")
+        for position, item in enumerate(stores, start=1):
+            name = item.text.strip() or f"（第 {position} 个门店）"
+            print(f"  {position}. {name}")
+        total = len(stores)
+        while True:
+            choice = input(
+                f"请选择门店（输入 1-{total}，直接回车默认第一个）: "
+            ).strip()
+            if not choice:
+                return 0
+            if choice.isdigit() and 1 <= int(choice) <= total:
+                return int(choice) - 1
+            print(f"输入无效，请输入 1-{total} 之间的数字。")
