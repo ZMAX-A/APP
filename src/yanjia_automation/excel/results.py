@@ -3,11 +3,14 @@ from __future__ import annotations
 import os
 import shutil
 import threading
+from copy import copy
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import cast
 
 from openpyxl import load_workbook
+from openpyxl.cell.cell import Cell
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.worksheet.worksheet import Worksheet
 
@@ -34,6 +37,12 @@ HISTORY_HEADERS = (
     "错误信息",
     "Allure报告目录",
 )
+
+_PASS_FILL = PatternFill("solid", fgColor="FFC6EFCE")
+_FAIL_FILL = PatternFill("solid", fgColor="FFFFC7CE")
+_PASS_FONT_COLOR = "FF006100"
+_FAIL_FONT_COLOR = "FF9C0006"
+_NEUTRAL_FONT_COLOR = "FF000000"
 
 
 @dataclass(frozen=True)
@@ -88,7 +97,8 @@ class ExcelResultWriter:
                     case_id = str(sheet.cell(row, headers["用例ID"]).value or "").strip()
                     if case_id not in selected:
                         continue
-                    sheet.cell(row, headers["实际结果"], "NOT_RUN")
+                    result_cell = sheet.cell(row, headers["实际结果"], "NOT_RUN")
+                    _style_result_cell(result_cell, "NOT_RUN")
                     sheet.cell(row, headers["最后执行时间"], "")
                     sheet.cell(row, headers["执行耗时(秒)"], "")
                     sheet.cell(row, headers["错误信息"], "")
@@ -111,7 +121,8 @@ class ExcelResultWriter:
                 sheet = workbook[CASE_SHEET]
                 headers = _ensure_columns(sheet, RESULT_COLUMNS)
                 row = _find_case_row(sheet, headers, result.case_id)
-                sheet.cell(row, headers["实际结果"], result.status)
+                result_cell = sheet.cell(row, headers["实际结果"], result.status)
+                _style_result_cell(result_cell, result.status)
                 sheet.cell(
                     row,
                     headers["最后执行时间"],
@@ -184,6 +195,24 @@ def _ensure_columns(sheet: Worksheet, names: tuple[str, ...]) -> dict[str, int]:
         sheet.column_dimensions[target.column_letter].width = 22
         headers[name] = column
     return headers
+
+
+def _style_result_cell(cell: Cell, status: str) -> None:
+    normalized = status.strip().upper()
+    font = cast(Font, copy(cell.font))
+    if normalized == "PASS":
+        cell.fill = copy(_PASS_FILL)
+        font.bold = True
+        font.color = _PASS_FONT_COLOR
+    elif normalized.startswith(("FAIL", "ERROR")):
+        cell.fill = copy(_FAIL_FILL)
+        font.bold = True
+        font.color = _FAIL_FONT_COLOR
+    else:
+        cell.fill = PatternFill(fill_type=None)
+        font.bold = False
+        font.color = _NEUTRAL_FONT_COLOR
+    cell.font = font
 
 
 def _header_map(sheet: Worksheet) -> dict[str, int]:

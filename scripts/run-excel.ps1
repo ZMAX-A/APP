@@ -6,11 +6,18 @@
     [switch]$RunSeeded,
     [switch]$AllowMutation,
     [switch]$AllowDestructive,
+    [switch]$CustomerPreflightVerified,
     [switch]$NoWriteBack,
+    [switch]$ReadOnlyRetry,
     [switch]$OpenReport,
+    [switch]$SkipExcelValidation,
+    [switch]$VerboseProgress,
     [switch]$SkipPreflight,
     [switch]$NoAutoStartAppium,
-    [switch]$KeepAppium
+    [switch]$KeepAppium,
+    [string]$AppiumProcessIdFile,
+    [ValidateRange(5, 300)]
+    [int]$AppiumStartupTimeoutSeconds = 60
 )
 
 $ErrorActionPreference = 'Stop'
@@ -20,6 +27,7 @@ $utf8 = New-Object System.Text.UTF8Encoding($false)
 $OutputEncoding = $utf8
 $env:PYTHONUTF8 = '1'
 $env:PYTHONIOENCODING = 'utf-8'
+$env:PYTHONUNBUFFERED = '1'
 $env:ALLURE_NO_ANALYTICS = '1'
 
 $projectRoot = Split-Path -Parent $PSScriptRoot
@@ -30,6 +38,7 @@ $runLock = $null
 $appiumProcess = $null
 $pushedLocation = $false
 $pytestExitCode = 2
+$appiumProcessIdPath = $null
 
 function Resolve-ProjectPath([string]$Value) {
     if ([System.IO.Path]::IsPathRooted($Value)) {
@@ -83,11 +92,18 @@ function Mask-DeviceId([string]$DeviceId) {
 if (-not (Test-Path -LiteralPath $python)) {
     throw "Project virtual environment was not found: $python"
 }
-if (-not (Get-Command allure -ErrorAction SilentlyContinue)) {
-    throw 'Allure command line was not found. Install allure-commandline before running.'
+$allureCommand = Get-Command allure -ErrorAction SilentlyContinue
+if ($OpenReport -and -not $allureCommand) {
+    throw 'OpenReport requires the Allure command line. Install allure-commandline before running.'
 }
 
 $excelPath = Resolve-ProjectPath $ExcelFile
+$appiumProcessIdPath = if ($AppiumProcessIdFile) {
+    Resolve-ProjectPath $AppiumProcessIdFile
+}
+else {
+    $null
+}
 if (-not (Test-Path -LiteralPath $excelPath)) {
     throw "Excel test workbook was not found: $excelPath"
 }
@@ -122,17 +138,33 @@ catch {
 }
 
 try {
-    Write-Host '正在离线校验 Excel 用例...'
-    $validationArguments = @($excelPath)
-    if ($CaseId) {
-        $validationArguments += @('--case-id', $CaseId)
-    }
-    & $python (Join-Path $PSScriptRoot 'validate_excel.py') @validationArguments
-    if ($LASTEXITCODE -ne 0) {
-        throw "Excel validation failed with exit code $LASTEXITCODE."
+    if (-not $SkipExcelValidation) {
+        Write-Host '正在离线校验 Excel 用例...'
+        $validationArguments = @($excelPath)
+        if ($CaseId) {
+            $validationArguments += @('--case-id', $CaseId)
+        }
+        & $python (Join-Path $PSScriptRoot 'validate_excel.py') @validationArguments
+        if ($LASTEXITCODE -ne 0) {
+            throw "Excel validation failed with exit code $LASTEXITCODE."
+        }
     }
 
     $appiumServerUrl = Get-ProjectSetting 'APPIUM_SERVER_URL' 'http://127.0.0.1:4723'
+    $configuredAppiumStartupTimeout = Get-ProjectSetting `
+        'APPIUM_STARTUP_TIMEOUT_SECONDS' `
+        ([string]$AppiumStartupTimeoutSeconds)
+    $effectiveAppiumStartupTimeout = 0
+    if (
+        -not [int]::TryParse(
+            $configuredAppiumStartupTimeout,
+            [ref]$effectiveAppiumStartupTimeout
+        ) -or
+        $effectiveAppiumStartupTimeout -lt 5 -or
+        $effectiveAppiumStartupTimeout -gt 300
+    ) {
+        throw 'APPIUM_STARTUP_TIMEOUT_SECONDS 必须是 5~300 之间的整数。'
+    }
     $appPackage = Get-ProjectSetting 'YANJIA_APP_PACKAGE' 'com.xiaofutech.yanjia_ai'
     $configuredUdid = Get-ProjectSetting 'ANDROID_UDID' ''
     $deviceId = $configuredUdid
@@ -242,8 +274,17 @@ try {
             PassThru = $true
         }
         $appiumProcess = Start-Process @startAppium
+        if ($appiumProcessIdPath) {
+            $appiumProcessIdDirectory = Split-Path -Parent $appiumProcessIdPath
+            New-Item -ItemType Directory -Path $appiumProcessIdDirectory -Force | Out-Null
+            [System.IO.File]::WriteAllText(
+                $appiumProcessIdPath,
+                [string]$appiumProcess.Id,
+                $utf8
+            )
+        }
         Write-Host "正在自动启动 Appium（PID $($appiumProcess.Id)）..."
-        $deadline = (Get-Date).AddSeconds(30)
+        $deadline = (Get-Date).AddSeconds($effectiveAppiumStartupTimeout)
         while ((Get-Date) -lt $deadline -and -not (Test-AppiumReady $appiumServerUrl)) {
             if ($appiumProcess.HasExited) {
                 throw "Appium 启动进程意外退出，请查看：$stderrLog"
@@ -251,7 +292,10 @@ try {
             Start-Sleep -Milliseconds 500
         }
         if (-not (Test-AppiumReady $appiumServerUrl)) {
-            throw "Appium 在30秒内未就绪，请查看：$stderrLog"
+            throw (
+                "Appium 在${effectiveAppiumStartupTimeout}秒内未就绪，" +
+                "请查看：$stdoutLog 和 $stderrLog"
+            )
         }
         Write-Host 'Appium 已就绪。'
     }
@@ -263,6 +307,7 @@ try {
     $allureReportRoot = Join-Path $reportsRoot 'allure-report'
     $allureReport = Join-Path $allureReportRoot $runId
     New-Item -ItemType Directory -Path $allureResults -Force | Out-Null
+    New-Item -ItemType Directory -Path $allureReportRoot -Force | Out-Null
 
     $previousReport = Get-ChildItem -LiteralPath $allureReportRoot -Directory -ErrorAction SilentlyContinue |
         Where-Object { $_.Name -ne $runId -and (Test-Path -LiteralPath (Join-Path $_.FullName 'history')) } |
@@ -304,6 +349,9 @@ try {
         '--allure-report-dir', $allureReport,
         '--alluredir', $allureResults
     )
+    if ($VerboseProgress) {
+        $pytestArguments += '-v'
+    }
     if ($ExcelOutput) {
         $pytestArguments += @('--excel-output', (Resolve-ProjectPath $ExcelOutput))
     }
@@ -322,13 +370,22 @@ try {
     if ($AllowDestructive) {
         $pytestArguments += '--allow-destructive'
     }
+    if ($CustomerPreflightVerified) {
+        $pytestArguments += '--customer-preflight-verified'
+    }
     if ($NoWriteBack) {
         $pytestArguments += '--no-excel-writeback'
+    }
+    if ($ReadOnlyRetry) {
+        $pytestArguments += '--readonly-retry'
     }
 
     Write-Host "Run ID: $runId"
     Write-Host "Excel:  $excelPath"
     Write-Host "Allure results: $allureResults"
+    if ($VerboseProgress) {
+        Write-Host '正在启动 pytest；下面将逐条显示用例名称、结果和百分比...' -ForegroundColor Cyan
+    }
 
     Push-Location $projectRoot
     $pushedLocation = $true
@@ -338,25 +395,30 @@ try {
     $resultFiles = @(
         Get-ChildItem -LiteralPath $allureResults -Filter '*-result.json' -ErrorAction SilentlyContinue
     )
-    if ($resultFiles.Count -gt 0) {
-        & allure generate $allureResults --output $allureReport --clean
+    if ($resultFiles.Count -gt 0 -and $allureCommand) {
+        & $allureCommand.Source generate $allureResults --output $allureReport --clean
         if ($LASTEXITCODE -ne 0) {
             throw "Allure report generation failed with exit code $LASTEXITCODE."
         }
+        Write-Host "Allure report generated: $allureReport"
+        Write-Host "View later: .\scripts\open-allure.ps1 -RunId $runId"
+        if ($OpenReport) {
+            Write-Host 'Allure report server is starting. Press Ctrl+C to stop it.'
+            & $allureCommand.Source open $allureReport
+        }
+    }
+    elseif ($resultFiles.Count -gt 0) {
+        Write-Warning "Allure CLI 未安装；测试已完成，原始结果保留在：$allureResults"
+    }
+    else {
+        Write-Warning 'No Allure result JSON files were generated.'
+    }
+    if ($resultFiles.Count -gt 0) {
         [System.IO.File]::WriteAllText(
             (Join-Path $allureReportRoot 'latest-run.txt'),
             $runId,
             $utf8
         )
-        Write-Host "Allure report generated: $allureReport"
-        Write-Host "View later: .\scripts\open-allure.ps1 -RunId $runId"
-        if ($OpenReport) {
-            Write-Host 'Allure report server is starting. Press Ctrl+C to stop it.'
-            & allure open $allureReport
-        }
-    }
-    else {
-        Write-Warning 'No Allure result JSON files were generated.'
     }
 }
 finally {
@@ -366,6 +428,9 @@ finally {
     if ($appiumProcess -and -not $KeepAppium) {
         Write-Host "正在关闭本次自动启动的 Appium（PID $($appiumProcess.Id)）..."
         Stop-ExactProcess -ProcessId $appiumProcess.Id
+        if ($appiumProcessIdPath) {
+            Remove-Item -LiteralPath $appiumProcessIdPath -Force -ErrorAction SilentlyContinue
+        }
     }
     if ($runLock) {
         $runLock.Dispose()

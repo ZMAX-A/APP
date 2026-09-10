@@ -12,6 +12,9 @@ __pycache__/
 *.egg-info/
 
 # Test output and device captures
+.tmp/
+outputs/
+*.inspect.ndjson
 artifacts/
 reports/
 allure-results/

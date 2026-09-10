@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from threading import Lock
 
 from appium import webdriver
@@ -54,10 +55,18 @@ class DriverManager:
                 self._driver = create_driver(self._settings)
             return self._driver
 
-    def restart(self) -> WebDriver:
+    def restart(self, *, repair_uiautomator2: bool = True) -> WebDriver:
+        """Recreate the session and optionally redeploy a broken UiAutomator2 server."""
+
         with self._lock:
             self._quit_current()
-            self._driver = create_driver(self._settings)
+            restart_settings = self._settings
+            if repair_uiautomator2 and self._settings.skip_server_installation:
+                restart_settings = replace(
+                    self._settings,
+                    skip_server_installation=False,
+                )
+            self._driver = create_driver(restart_settings)
             return self._driver
 
     def quit(self) -> None:

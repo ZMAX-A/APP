@@ -9,9 +9,10 @@ from openpyxl.worksheet.worksheet import Worksheet
 
 from yanjia_automation.excel.models import ExcelCase, ExcelStep
 from yanjia_automation.excel.single_sheet import (
+    ANDROID_SINGLE_SHEET_CASES,
     SINGLE_SHEET_REQUIRED_HEADERS,
     SingleSheetMigrationError,
-    load_android_login_cases,
+    load_android_single_sheet_cases,
 )
 
 CASE_SHEET = "自动化测试用例"
@@ -67,15 +68,20 @@ class ExcelCaseRepository:
         if not self.path.is_file():
             raise WorkbookFormatError(f"Excel用例文件不存在：{self.path}")
 
-        workbook = load_workbook(self.path, read_only=True, data_only=True)
+        # The execution workbook is small, while read-only worksheets make each
+        # sheet.cell() lookup rescan worksheet XML. Loading it eagerly keeps the
+        # existing validation semantics and reduces targeted collection from
+        # minutes to well below one second.
+        workbook = load_workbook(self.path, read_only=False, data_only=True)
         try:
             if CASE_SHEET not in workbook.sheetnames:
                 raise WorkbookFormatError(f"缺少工作表：{CASE_SHEET}")
             if STEP_SHEET not in workbook.sheetnames:
                 case_sheet = workbook[CASE_SHEET]
+                _ensure_sheet_dimensions(case_sheet)
                 try:
                     case_headers = _headers(case_sheet, SINGLE_SHEET_REQUIRED_HEADERS)
-                    cases = load_android_login_cases(
+                    cases = load_android_single_sheet_cases(
                         case_sheet,
                         case_headers,
                         case_patterns=case_patterns,
@@ -91,10 +97,29 @@ class ExcelCaseRepository:
 
             case_sheet = workbook[CASE_SHEET]
             step_sheet = workbook[STEP_SHEET]
+            _ensure_sheet_dimensions(case_sheet)
+            _ensure_sheet_dimensions(step_sheet)
             case_headers = _headers(case_sheet, CASE_REQUIRED_HEADERS)
             step_headers = _headers(step_sheet, STEP_REQUIRED_HEADERS)
             steps_by_case = self._load_steps(step_sheet, step_headers)
-            cases = self._load_case_rows(case_sheet, case_headers, steps_by_case)
+            try:
+                single_sheet_headers = _headers(case_sheet, SINGLE_SHEET_REQUIRED_HEADERS)
+                migrated_cases = load_android_single_sheet_cases(
+                    case_sheet,
+                    single_sheet_headers,
+                    case_patterns=tuple(sorted(ANDROID_SINGLE_SHEET_CASES)),
+                )
+            except SingleSheetMigrationError as error:
+                raise WorkbookFormatError(str(error)) from error
+            migrated_by_id = {case.case_id: case for case in migrated_cases}
+            for case_id, migrated_case in migrated_by_id.items():
+                steps_by_case.setdefault(case_id, list(migrated_case.steps))
+            cases = self._load_case_rows(
+                case_sheet,
+                case_headers,
+                steps_by_case,
+                migrated_by_id=migrated_by_id,
+            )
         finally:
             workbook.close()
 
@@ -166,6 +191,8 @@ class ExcelCaseRepository:
         sheet: Worksheet,
         headers: dict[str, int],
         steps_by_case: dict[str, list[ExcelStep]],
+        *,
+        migrated_by_id: dict[str, ExcelCase],
     ) -> list[ExcelCase]:
         cases: list[ExcelCase] = []
         seen_ids: set[str] = set()
@@ -177,18 +204,25 @@ class ExcelCaseRepository:
                 raise WorkbookFormatError(f"{CASE_SHEET} 第{row}行用例ID重复：{case_id}")
             seen_ids.add(case_id)
 
-            automation_status = _text(_value(sheet, row, headers, "自动化状态"))
-            enabled = _boolean(
+            migrated_case = migrated_by_id.get(case_id)
+            automation_status = _text(_value(sheet, row, headers, "自动化状态")) or (
+                migrated_case.automation_status if migrated_case is not None else ""
+            )
+            requested = _boolean(
                 _value(sheet, row, headers, "是否执行"),
                 default=automation_status.upper().startswith("AUTOMATED"),
             )
-            tags = tuple(
+            configured_tags = tuple(
                 dict.fromkeys(
                     part.strip().lower()
                     for part in _text(_value(sheet, row, headers, "标签")).split(",")
                     if part.strip()
                 )
             )
+            tags = configured_tags or (
+                migrated_case.tags if migrated_case is not None else ()
+            )
+            enabled_steps = tuple(step for step in steps_by_case.get(case_id, []) if step.enabled)
             cases.append(
                 ExcelCase(
                     source_row=row,
@@ -206,9 +240,9 @@ class ExcelCaseRepository:
                     ),
                     timeout=_number(_value(sheet, row, headers, "超时(秒)"), default=10.0),
                     tags=tags,
-                    enabled=enabled,
+                    enabled=requested and bool(enabled_steps),
                     automation_status=automation_status,
-                    steps=tuple(step for step in steps_by_case.get(case_id, []) if step.enabled),
+                    steps=enabled_steps,
                 )
             )
 
@@ -223,6 +257,19 @@ def parse_csv_option(value: str | None) -> tuple[str, ...]:
     if not value:
         return ()
     return tuple(part.strip() for part in value.split(",") if part.strip())
+
+
+def _ensure_sheet_dimensions(sheet: Worksheet) -> None:
+    """Populate bounds for read-only workbooks with no dimension metadata."""
+    if sheet.max_row is not None and sheet.max_column is not None:
+        return
+    calculate_dimension = getattr(sheet, "calculate_dimension", None)
+    if calculate_dimension is None:
+        return
+    try:
+        calculate_dimension(force=True)
+    except TypeError:
+        calculate_dimension()
 
 
 def _headers(sheet: Worksheet, required: set[str]) -> dict[str, int]:

@@ -2,17 +2,31 @@ from __future__ import annotations
 
 import json
 import time
+from dataclasses import replace
 from datetime import datetime
 
 import allure
 import pytest
+from appium.webdriver.webdriver import WebDriver
 
 from yanjia_automation.config import Settings
 from yanjia_automation.driver import DriverManager, is_recoverable_driver_error
 from yanjia_automation.excel.models import ExcelCase
 from yanjia_automation.excel.results import ExcelResult, ExcelResultWriter
 from yanjia_automation.excel.runner import ExcelCaseRunner
+from yanjia_automation.excel.safety import (
+    execution_skip_reason,
+    is_readonly,
+    is_safe_to_retry,
+)
 from yanjia_automation.excel.variables import VariableResolver
+from yanjia_automation.flows.customer_mutation import CustomerRestoreError
+from yanjia_automation.flows.recovery import recover_login_if_needed
+from yanjia_automation.flows.remark_mutation import RemarkRestoreError
+from yanjia_automation.flows.tag_mutation import TagRestoreError
+
+MUTATION_BLOCKED_KEY: pytest.StashKey[str] = pytest.StashKey()
+RESTORE_ERRORS = (CustomerRestoreError, TagRestoreError, RemarkRestoreError)
 
 
 def test_excel_case(
@@ -29,6 +43,8 @@ def test_excel_case(
 
     skip_reason = _safety_skip_reason(excel_case, pytestconfig, settings)
     if skip_reason:
+        if pytestconfig.stash.get(MUTATION_BLOCKED_KEY, None) and not is_readonly(excel_case.tags):
+            allure.dynamic.label("mutation_blocked", "true")
         finished_at = datetime.now()
         excel_result_writer.record(
             ExcelResult(
@@ -42,11 +58,28 @@ def test_excel_case(
         )
         pytest.skip(skip_reason)
 
-    driver_manager: DriverManager = request.getfixturevalue("driver_manager")
-    driver = driver_manager.get()
-    runner = ExcelCaseRunner(driver, settings, excel_variables)
+    runner_settings = replace(
+        settings,
+        run_seeded=bool(pytestconfig.getoption("--run-seeded")) or settings.run_seeded,
+        allow_mutation=(
+            bool(pytestconfig.getoption("--allow-mutation")) or settings.allow_mutation
+        ),
+        allow_destructive=(
+            bool(pytestconfig.getoption("--allow-destructive"))
+            or settings.allow_destructive
+        ),
+        customer_preflight_verified=(
+            bool(pytestconfig.getoption("--customer-preflight-verified"))
+            or settings.customer_preflight_verified
+        ),
+    )
+    driver: WebDriver | None = None
+    runner: ExcelCaseRunner | None = None
     try:
+        driver_manager: DriverManager = request.getfixturevalue("driver_manager")
         try:
+            driver = driver_manager.get()
+            runner = ExcelCaseRunner(driver, runner_settings, excel_variables)
             runner.run(excel_case)
         except Exception as first_error:
             if not _can_retry_infrastructure(excel_case, first_error):
@@ -57,19 +90,36 @@ def test_excel_case(
                 attachment_type=allure.attachment_type.TEXT,
             )
             allure.dynamic.label("infrastructure_retry", "1")
+            # Do not collect evidence or recover authentication using a stale driver
+            # if creating the replacement session itself fails.
+            driver = None
+            runner = None
             driver = driver_manager.restart()
-            runner = ExcelCaseRunner(driver, settings, excel_variables)
+            runner = ExcelCaseRunner(driver, runner_settings, excel_variables)
             runner.run(excel_case)
     except Exception as error:
+        if isinstance(error, RESTORE_ERRORS):
+            pytestconfig.stash[MUTATION_BLOCKED_KEY] = (
+                f"{excel_case.case_id} 数据恢复失败；本轮后续写入已停止，请先核实并恢复测试数据"
+            )
+            allure.dynamic.label("restoration_failed", "true")
         finished_at = datetime.now()
         safe_error = excel_variables.redact(error)
         try:
-            runner.attach_failure_evidence()
+            if runner is not None:
+                runner.attach_failure_evidence()
         except Exception as evidence_error:
             allure.attach(
                 excel_variables.redact(evidence_error),
                 name="失败证据采集异常",
                 attachment_type=allure.attachment_type.TEXT,
+            )
+        if driver is not None and not isinstance(error, RESTORE_ERRORS):
+            _recover_authentication_for_next_case(
+                excel_case,
+                driver,
+                runner_settings,
+                excel_variables,
             )
         excel_result_writer.record(
             ExcelResult(
@@ -129,27 +179,59 @@ def _safety_skip_reason(
     config: pytest.Config,
     settings: Settings,
 ) -> str | None:
-    tags = set(case.tags)
+    blocked = config.stash.get(MUTATION_BLOCKED_KEY, None)
+    if blocked and not is_readonly(case.tags):
+        return blocked
+    if config.getoption("--readonly-retry") and not is_safe_to_retry(case.tags):
+        return "自动复跑仅允许可重复执行的只读用例；写入、删除、持久化和 no_retry 用例已阻止"
     run_seeded = bool(config.getoption("--run-seeded")) or settings.run_seeded
     allow_mutation = bool(config.getoption("--allow-mutation")) or settings.allow_mutation
     allow_destructive = (
         bool(config.getoption("--allow-destructive")) or settings.allow_destructive
     )
-    if "requires_seed" in tags and not run_seeded:
-        return "需要 --run-seeded 或 YANJIA_RUN_SEEDED=true"
-    if "destructive" in tags and not (allow_mutation and allow_destructive):
-        return "破坏性用例需要同时授权 --allow-mutation --allow-destructive"
-    if "mutating" in tags and not allow_mutation:
-        return "写入用例需要 --allow-mutation 或 YANJIA_ALLOW_MUTATION=true"
-    return None
+    customer_preflight_verified = (
+        bool(config.getoption("--customer-preflight-verified"))
+        or settings.customer_preflight_verified
+    )
+    return execution_skip_reason(
+        case,
+        run_seeded=run_seeded,
+        allow_mutation=allow_mutation,
+        allow_destructive=allow_destructive,
+        mutation_customer_query=settings.mutation_customer_query,
+        customer_preflight_verified=customer_preflight_verified,
+    )
 
 
 def _can_retry_infrastructure(case: ExcelCase, error: BaseException) -> bool:
+    return is_safe_to_retry(case.tags) and is_recoverable_driver_error(error)
+
+
+def _recover_authentication_for_next_case(
+    case: ExcelCase,
+    driver: WebDriver,
+    settings: Settings,
+    variables: VariableResolver,
+) -> bool:
     tags = set(case.tags)
-    safe_to_repeat = (
-        "readonly" in tags
-        and "mutating" not in tags
-        and "destructive" not in tags
-        and "no_retry" not in tags
+    if "requires_auth" not in tags or case.case_id.startswith("TC-LOGIN-"):
+        return False
+    try:
+        recovered = recover_login_if_needed(driver, settings)
+    except Exception as recovery_error:
+        allure.attach(
+            variables.redact(recovery_error),
+            name="登录态恢复失败",
+            attachment_type=allure.attachment_type.TEXT,
+        )
+        allure.dynamic.label("authentication_recovery", "failed")
+        return False
+    if not recovered:
+        return False
+    allure.attach(
+        "检测到应用意外返回登录页，已重新登录并恢复到首页；本用例保留原始失败，复跑仍受安全门禁约束。",
+        name="登录态已自动恢复",
+        attachment_type=allure.attachment_type.TEXT,
     )
-    return safe_to_repeat and is_recoverable_driver_error(error)
+    allure.dynamic.label("authentication_recovery", "succeeded")
+    return True

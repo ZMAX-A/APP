@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 from datetime import date, datetime
+from hashlib import sha256
 
 from dotenv import dotenv_values
 
@@ -19,7 +21,19 @@ class VariableResolutionError(ValueError):
 class VariableResolver:
     def __init__(self, values: dict[str, str], *, sensitive_values: set[str]) -> None:
         self._values = values
-        self._sensitive_values = {value for value in sensitive_values if value}
+        # Tracebacks render locals with repr(), while JSON may escape quotes,
+        # backslashes and non-ASCII characters. Redact those representations too.
+        self._sensitive_values = {
+            representation
+            for value in sensitive_values
+            if value
+            for representation in (
+                value,
+                repr(value)[1:-1],
+                json.dumps(value, ensure_ascii=False)[1:-1],
+                json.dumps(value, ensure_ascii=True)[1:-1],
+            )
+        }
 
     @classmethod
     def from_settings(
@@ -35,15 +49,28 @@ class VariableResolver:
             if value is not None
         }
         values.update({key: value for key, value in os.environ.items() if value is not None})
+        run_token = re.sub(r"[^A-Za-z0-9]", "", run_id)[-6:] or "RUN"
+        run_phone_suffix = int.from_bytes(
+            sha256(run_id.encode("utf-8")).digest()[:4], "big"
+        ) % 1_000_000
         values.update(
             {
                 "RUN_ID": run_id,
+                "RUN_TOKEN": run_token,
+                "RUN_PHONE": f"13900{run_phone_suffix:06d}",
                 "TODAY": date.today().isoformat(),
                 "NOW": datetime.now().isoformat(timespec="seconds"),
                 "YANJIA_STORE_OR_FIRST": settings.store_name or "",
                 "YANJIA_APP_PACKAGE": settings.app_package,
             }
         )
+        values.setdefault("INVALID_USERNAME", "__invalid_yanjia_user__")
+        values.setdefault("INVALID_PASSWORD", "__invalid_yanjia_password__")
+        values.setdefault(
+            "NON_EXISTENT_CASE_TAG",
+            f"__missing_case_tag_{run_token}__",
+        )
+        values.setdefault("SPACE", " ")
 
         try:
             credentials = settings.credentials()

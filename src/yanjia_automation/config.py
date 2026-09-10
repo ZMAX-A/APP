@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from dotenv import dotenv_values
@@ -21,7 +21,7 @@ class Credentials:
     password: str
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, repr=False)
 class Settings:
     appium_server_url: str
     app_package: str
@@ -35,7 +35,30 @@ class Settings:
     capture_sensitive_artifacts: bool
     skip_device_initialization: bool
     skip_server_installation: bool
+    mutation_customer_query: str | None = field(default=None, repr=False)
+    customer_preflight_verified: bool = False
     project_root: Path = PROJECT_ROOT
+
+    def __repr__(self) -> str:
+        return (
+            "Settings("
+            f"appium_server_url={self.appium_server_url!r}, "
+            f"app_package={self.app_package!r}, "
+            f"app_activity={self.app_activity!r}, "
+            f"udid_configured={bool(self.udid)}, "
+            f"store_name_configured={bool(self.store_name)}, "
+            f"no_reset={self.no_reset}, "
+            f"run_seeded={self.run_seeded}, "
+            f"allow_mutation={self.allow_mutation}, "
+            f"allow_destructive={self.allow_destructive}, "
+            f"capture_sensitive_artifacts={self.capture_sensitive_artifacts}, "
+            f"skip_device_initialization={self.skip_device_initialization}, "
+            f"skip_server_installation={self.skip_server_installation}, "
+            "mutation_customer_query_configured="
+            f"{bool(self.mutation_customer_query)}, "
+            f"customer_preflight_verified={self.customer_preflight_verified}"
+            ")"
+        )
 
     def credentials(self) -> Credentials:
         username = _setting("YANJIA_USERNAME") or _setting("TEST_USERNAME")
@@ -113,5 +136,9 @@ def load_settings() -> Settings:
         ),
         skip_server_installation=_as_bool(
             _setting("APPIUM_SKIP_SERVER_INSTALLATION")
+        ),
+        mutation_customer_query=_setting("YANJIA_MUTATION_CUSTOMER_QUERY"),
+        customer_preflight_verified=_as_bool(
+            _setting("YANJIA_CUSTOMER_PREFLIGHT_VERIFIED")
         ),
     )

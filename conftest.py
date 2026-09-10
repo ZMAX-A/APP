@@ -6,6 +6,15 @@ import pytest
 def pytest_addoption(parser: pytest.Parser) -> None:
     safety = parser.getgroup("yanjia safety")
     safety.addoption(
+        "--readonly-retry",
+        action="store_true",
+        default=False,
+        help=(
+            "Restrict an automatic retry to repeatable read-only cases, "
+            "regardless of write flags."
+        ),
+    )
+    safety.addoption(
         "--run-seeded",
         action="store_true",
         default=False,
@@ -22,6 +31,12 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         action="store_true",
         default=False,
         help="Allow tests that delete data. Mutation authorization is also required.",
+    )
+    safety.addoption(
+        "--customer-preflight-verified",
+        action="store_true",
+        default=False,
+        help="Confirm that the dedicated customer passed a read-only unique-match preflight.",
     )
 
     excel = parser.getgroup("yanjia excel")

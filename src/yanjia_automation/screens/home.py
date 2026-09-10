@@ -19,5 +19,11 @@ class HomeScreen(BaseScreen):
     def open_case_library(self) -> None:
         self.click(self.case_library)
 
+    def open_academy(self) -> None:
+        self.click(self.academy)
+
+    def open_search(self) -> None:
+        self.click(self.search_button)
+
     def open_settings(self) -> None:
         self.click(self.settings)

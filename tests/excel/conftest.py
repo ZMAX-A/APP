@@ -5,8 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from yanjia_automation.config import Settings
+from yanjia_automation.config import Settings, load_settings
 from yanjia_automation.excel.models import ExcelCase
+from yanjia_automation.excel.reporting import REDACTOR_KEY, install_report_redactor
 from yanjia_automation.excel.results import ExcelResultWriter
 from yanjia_automation.excel.variables import VariableResolver
 from yanjia_automation.excel.workbook import (
@@ -16,6 +17,18 @@ from yanjia_automation.excel.workbook import (
 )
 
 EXCEL_CASES_KEY: pytest.StashKey[tuple[ExcelCase, ...]] = pytest.StashKey()
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    # Install before fixture setup so credential/setup errors are also protected.
+    install_report_redactor(
+        config,
+        VariableResolver.from_settings(
+            load_settings(),
+            run_id=_option_text(config, "--excel-run-id") or "REDACTION",
+            require_credentials=False,
+        ),
+    )
 
 
 def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
@@ -61,11 +74,13 @@ def excel_variables(
     pytestconfig: pytest.Config,
 ) -> VariableResolver:
     cases = pytestconfig.stash.get(EXCEL_CASES_KEY, ())
-    return VariableResolver.from_settings(
+    variables = VariableResolver.from_settings(
         settings,
         run_id=excel_run_id,
         require_credentials=_cases_require_credentials(cases),
     )
+    pytestconfig.stash[REDACTOR_KEY].variables = variables
+    return variables
 
 
 @pytest.fixture(scope="session")
@@ -109,7 +124,10 @@ def _option_text(
     *,
     default: str | None = None,
 ) -> str | None:
-    value: object = config.getoption(name)
+    try:
+        value: object = config.getoption(name)
+    except ValueError:
+        return default
     return value if isinstance(value, str) else default
 
 
