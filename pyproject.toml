@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "yanjia-android-automation"
-version = "1.0.8"
+version = "1.0.9"
 description = "Black-box Android automation for the YanJia AI tablet application"
 readme = "README.md"
 requires-python = ">=3.12,<4"

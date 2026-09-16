@@ -30,6 +30,7 @@ _TAG_DIALOG = resource_id("records_remark_tag_cl")
 _TAG_CANCEL = resource_id("records_remark_tag_cancel_tv")
 _DELETE_CONFIRM = resource_id("cover_prompt_right_tv")
 _REMARK_CLOSE = resource_id("records_remark_close_ifv")
+_TAG_RESTORE_SETTLE_SECONDS = 60
 
 
 class TagMutationSafetyError(RuntimeError):
@@ -207,9 +208,7 @@ class DedicatedTagMutationFlow:
             return
         created_display_text = self._created_display_text(snapshot, current)
         self._delete_exact_display_tag(created_display_text)
-        WebDriverWait(self.driver, self.timeout).until(
-            lambda _: self._snapshot() == snapshot
-        )
+        self._wait_for_restored_snapshot(snapshot)
         self._close_remark()
 
     def delete_created_tag(self, snapshot: TagSnapshot) -> None:
@@ -221,9 +220,15 @@ class DedicatedTagMutationFlow:
             raise TagMutationSafetyError("No generated tag is available to delete.")
         created_display_text = self._created_display_text(snapshot, current)
         self._delete_exact_display_tag(created_display_text)
-        WebDriverWait(self.driver, self.timeout).until(
-            lambda _: self._snapshot() == snapshot
-        )
+        self._wait_for_restored_snapshot(snapshot)
+
+    def _wait_for_restored_snapshot(self, snapshot: TagSnapshot) -> None:
+        """Wait for the backend-driven tag deletion to settle on the device UI."""
+
+        WebDriverWait(
+            self.driver,
+            max(self.timeout, _TAG_RESTORE_SETTLE_SECONDS),
+        ).until(lambda _: self._snapshot() == snapshot)
 
     @staticmethod
     def _created_display_text(snapshot: TagSnapshot, current: TagSnapshot) -> str:

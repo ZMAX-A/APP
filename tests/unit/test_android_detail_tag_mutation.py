@@ -206,6 +206,32 @@ def test_tag_restore_uses_collection_diff_instead_of_original_input_text(
     flow._close_remark.assert_called_once_with()
 
 
+def test_tag_restore_waits_for_slow_backend_settlement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    before = TagSnapshot(("existing",), 1, 1)
+    observed_timeouts: list[float] = []
+    flow = object.__new__(DedicatedTagMutationFlow)
+    flow.driver = Mock()
+    flow.timeout = 15
+    flow._snapshot = Mock(return_value=before)
+
+    class CapturingWait:
+        def __init__(self, driver, timeout) -> None:
+            del driver
+            observed_timeouts.append(timeout)
+
+        def until(self, condition):
+            assert condition(None)
+            return True
+
+    monkeypatch.setattr(tag_mutation_module, "WebDriverWait", CapturingWait)
+
+    flow._wait_for_restored_snapshot(before)
+
+    assert observed_timeouts == [60]
+
+
 def test_consultation_tag_flow_searches_exact_phone_and_waits_for_remark_entry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
