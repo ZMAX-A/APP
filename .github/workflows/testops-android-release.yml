@@ -137,7 +137,6 @@ jobs:
           echo "package_digest=${digest}" >> "${GITHUB_OUTPUT}"
 
       - name: Generate SPDX SBOM
-        if: github.event_name == 'push'
         uses: anchore/sbom-action@v0.24.0
         with:
           path: ${{ runner.temp }}/testops-release/bundle
@@ -147,7 +146,6 @@ jobs:
           upload-release-assets: false
 
       - name: Scan SBOM for critical vulnerabilities
-        if: github.event_name == 'push'
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: sbom
@@ -158,7 +156,6 @@ jobs:
           exit-code: "1"
 
       - name: Build provenance statement
-        if: github.event_name == 'push'
         env:
           ARTIFACT_DIGEST: ${{ steps.package.outputs.artifact_digest }}
           PACKAGE_DIGEST: ${{ steps.package.outputs.package_digest }}
