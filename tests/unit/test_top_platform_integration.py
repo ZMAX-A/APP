@@ -35,7 +35,7 @@ def test_testops_package_manifest_matches_android_runner() -> None:
     assert manifest == {
         "schema_version": "1.0",
         "name": "yanjia-android-appium",
-        "version": "1.0.2",
+        "version": "1.0.3",
         "runner_type": "ANDROID_APPIUM",
         "entrypoint": "scripts/run-excel.ps1",
         "workbook": "test_case.xlsx",
@@ -48,6 +48,7 @@ def test_testops_execution_can_ignore_local_dotenv(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     (tmp_path / ".env").write_text("SEEDED_CUSTOMER_PHONE=private-local-value\n", encoding="utf-8")
+    monkeypatch.delenv("SEEDED_CUSTOMER_PHONE", raising=False)
     monkeypatch.setenv("YANJIA_IGNORE_DOTENV", "true")
 
     resolver = VariableResolver.from_settings(
