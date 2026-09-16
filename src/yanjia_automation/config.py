@@ -67,7 +67,7 @@ class Settings:
             return Credentials(username=username, password=password)
 
         legacy_path = self.project_root / "env.txt"
-        if legacy_path.exists():
+        if not _ignore_local_config() and legacy_path.exists():
             values = [
                 line.strip()
                 for line in legacy_path.read_text(encoding="utf-8-sig").splitlines()
@@ -93,6 +93,10 @@ class Settings:
 _DOTENV = dotenv_values(PROJECT_ROOT / ".env")
 
 
+def _ignore_local_config() -> bool:
+    return _as_bool(os.getenv("YANJIA_IGNORE_DOTENV"))
+
+
 def _legacy_value(line: str, *, aliases: set[str]) -> str:
     for separator in ("：", ":", "="):
         if separator not in line:
@@ -108,7 +112,7 @@ def _legacy_value(line: str, *, aliases: set[str]) -> str:
 
 def _setting(name: str, default: str | None = None) -> str | None:
     value = os.getenv(name)
-    if value is None:
+    if value is None and not _ignore_local_config():
         dotenv_value = _DOTENV.get(name)
         value = str(dotenv_value) if dotenv_value is not None else None
     if value is None:

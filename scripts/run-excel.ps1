@@ -1,6 +1,8 @@
 ﻿param(
     [string]$ExcelFile = "test_case.xlsx",
     [string]$ExcelOutput,
+    [string]$ReportsRoot,
+    [string]$RunId,
     [string]$CaseId,
     [string]$Tags,
     [switch]$RunSeeded,
@@ -15,6 +17,7 @@
     [switch]$SkipPreflight,
     [switch]$NoAutoStartAppium,
     [switch]$KeepAppium,
+    [switch]$IgnoreDotEnv,
     [string]$AppiumProcessIdFile,
     [ValidateRange(5, 300)]
     [int]$AppiumStartupTimeoutSeconds = 60
@@ -29,11 +32,27 @@ $env:PYTHONUTF8 = '1'
 $env:PYTHONIOENCODING = 'utf-8'
 $env:PYTHONUNBUFFERED = '1'
 $env:ALLURE_NO_ANALYTICS = '1'
+if ($IgnoreDotEnv) {
+    $env:YANJIA_IGNORE_DOTENV = 'true'
+}
 
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $python = Join-Path $projectRoot '.venv\Scripts\python.exe'
-$reportsRoot = Join-Path $projectRoot 'reports'
-$runId = Get-Date -Format 'yyyyMMdd_HHmmss'
+$effectiveReportsRoot = if ($ReportsRoot) {
+    if ([System.IO.Path]::IsPathRooted($ReportsRoot)) {
+        [System.IO.Path]::GetFullPath($ReportsRoot)
+    }
+    else {
+        [System.IO.Path]::GetFullPath((Join-Path $projectRoot $ReportsRoot))
+    }
+}
+else {
+    Join-Path $projectRoot 'reports'
+}
+if ($RunId -and $RunId -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$') {
+    throw 'RunId 只能包含字母、数字、点、下划线和连字符，且最长 128 个字符。'
+}
+$effectiveRunId = if ($RunId) { $RunId } else { Get-Date -Format 'yyyyMMdd_HHmmss' }
 $runLock = $null
 $appiumProcess = $null
 $pushedLocation = $false
@@ -53,7 +72,7 @@ function Get-ProjectSetting([string]$Name, [string]$DefaultValue) {
         return $environmentValue.Trim()
     }
     $dotenv = Join-Path $projectRoot '.env'
-    if (Test-Path -LiteralPath $dotenv) {
+    if (-not $IgnoreDotEnv -and (Test-Path -LiteralPath $dotenv)) {
         $line = Get-Content -LiteralPath $dotenv -Encoding UTF8 |
             Where-Object { $_ -match ("^\s*" + [regex]::Escape($Name) + "\s*=") } |
             Select-Object -First 1
@@ -123,8 +142,8 @@ if (-not $NoWriteBack -and -not $ExcelOutput) {
     }
 }
 
-New-Item -ItemType Directory -Path $reportsRoot -Force | Out-Null
-$lockPath = Join-Path $reportsRoot '.excel-run.lock'
+New-Item -ItemType Directory -Path $effectiveReportsRoot -Force | Out-Null
+$lockPath = Join-Path $effectiveReportsRoot '.excel-run.lock'
 try {
     $runLock = [System.IO.File]::Open(
         $lockPath,
@@ -239,10 +258,10 @@ try {
         if ($serverUri.Host -notin @('127.0.0.1', 'localhost', '::1')) {
             throw "远程 Appium 未就绪，无法自动启动：$appiumServerUrl"
         }
-        $appiumLogDir = Join-Path $reportsRoot 'appium'
+        $appiumLogDir = Join-Path $effectiveReportsRoot 'appium'
         New-Item -ItemType Directory -Path $appiumLogDir -Force | Out-Null
-        $stdoutLog = Join-Path $appiumLogDir "$runId.stdout.log"
-        $stderrLog = Join-Path $appiumLogDir "$runId.stderr.log"
+        $stdoutLog = Join-Path $appiumLogDir "$effectiveRunId.stdout.log"
+        $stderrLog = Join-Path $appiumLogDir "$effectiveRunId.stderr.log"
         $appiumCommand = Get-Command appium -ErrorAction Stop
         $appiumInstallRoot = Split-Path -Parent $appiumCommand.Source
         $appiumEntry = Join-Path $appiumInstallRoot 'node_modules\appium\index.js'
@@ -303,14 +322,14 @@ try {
         Write-Host '复用已运行的 Appium 服务。'
     }
 
-    $allureResults = Join-Path $reportsRoot "allure-results\$runId"
-    $allureReportRoot = Join-Path $reportsRoot 'allure-report'
-    $allureReport = Join-Path $allureReportRoot $runId
+    $allureResults = Join-Path $effectiveReportsRoot "allure-results\$effectiveRunId"
+    $allureReportRoot = Join-Path $effectiveReportsRoot 'allure-report'
+    $allureReport = Join-Path $allureReportRoot $effectiveRunId
     New-Item -ItemType Directory -Path $allureResults -Force | Out-Null
     New-Item -ItemType Directory -Path $allureReportRoot -Force | Out-Null
 
     $previousReport = Get-ChildItem -LiteralPath $allureReportRoot -Directory -ErrorAction SilentlyContinue |
-        Where-Object { $_.Name -ne $runId -and (Test-Path -LiteralPath (Join-Path $_.FullName 'history')) } |
+        Where-Object { $_.Name -ne $effectiveRunId -and (Test-Path -LiteralPath (Join-Path $_.FullName 'history')) } |
         Sort-Object LastWriteTime -Descending |
         Select-Object -First 1
     if ($previousReport) {
@@ -324,7 +343,7 @@ try {
 
     $environment = @(
         'Project=YanJia AI Android Automation'
-        "RunId=$runId"
+        "RunId=$effectiveRunId"
         "ExcelWorkbook=$excelPath"
         'Platform=Android'
         'Framework=Appium + pytest + Excel'
@@ -345,7 +364,7 @@ try {
     $pytestArguments = @(
         '-m', 'excel_driven',
         '--excel-file', $excelPath,
-        '--excel-run-id', $runId,
+        '--excel-run-id', $effectiveRunId,
         '--allure-report-dir', $allureReport,
         '--alluredir', $allureResults
     )
@@ -380,7 +399,7 @@ try {
         $pytestArguments += '--readonly-retry'
     }
 
-    Write-Host "Run ID: $runId"
+    Write-Host "Run ID: $effectiveRunId"
     Write-Host "Excel:  $excelPath"
     Write-Host "Allure results: $allureResults"
     if ($VerboseProgress) {
@@ -401,7 +420,7 @@ try {
             throw "Allure report generation failed with exit code $LASTEXITCODE."
         }
         Write-Host "Allure report generated: $allureReport"
-        Write-Host "View later: .\scripts\open-allure.ps1 -RunId $runId"
+        Write-Host "View later: .\scripts\open-allure.ps1 -RunId $effectiveRunId"
         if ($OpenReport) {
             Write-Host 'Allure report server is starting. Press Ctrl+C to stop it.'
             & $allureCommand.Source open $allureReport
@@ -416,7 +435,7 @@ try {
     if ($resultFiles.Count -gt 0) {
         [System.IO.File]::WriteAllText(
             (Join-Path $allureReportRoot 'latest-run.txt'),
-            $runId,
+            $effectiveRunId,
             $utf8
         )
     }

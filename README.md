@@ -16,6 +16,12 @@
 
 V1.0.0 发布门禁：2026-09-10 在上述设备和应用版本完成 Run `20260910_111128`，84/84 条启用用例全部通过；发布前另有 204/204 条单元测试、Ruff、Pyright 和 PowerShell 语法检查通过。仓库中的工作簿作为可公开复用的测试基线，实际结果统一重置为 `NOT_RUN`，不包含本机运行历史、绝对报告路径、账号密码或完整顾客手机号。
 
+## TOP 平台运行接口
+
+项目通过根目录的 `testops-package.json` 声明 `ANDROID_APPIUM` 运行包。TOP 的 Windows 设备 Worker 使用 `scripts/run-excel.ps1` 按精确用例 ID 执行，并通过 `-ReportsRoot`、`-RunId` 将 Allure 与日志写入平台 Run 工作区。平台运行固定启用 `-NoWriteBack -SkipExcelValidation -IgnoreDotEnv`：不修改源工作簿、不加载项目本地 `.env`，账号密码和专用客户查询只能由 TOP Secret Binding 注入。
+
+APPium/ADB 仍运行在连接真机的 Windows Worker 上；TOP 控制平面只保存不可变基线、运行快照、进度和脱敏结果。写入与删除用例继续执行唯一客户预检和显式授权门禁，只读偶发失败只允许在 30 秒后复跑一次。
+
 ## 已自动化的只读路径
 
 - 登录或恢复已有会话，选择门店并进入首页

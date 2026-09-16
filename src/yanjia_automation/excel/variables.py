@@ -43,11 +43,20 @@ class VariableResolver:
         run_id: str,
         require_credentials: bool = True,
     ) -> VariableResolver:
-        values: dict[str, str] = {
-            key: str(value)
-            for key, value in dotenv_values(settings.project_root / ".env").items()
-            if value is not None
-        }
+        values: dict[str, str] = {}
+        if os.getenv("YANJIA_IGNORE_DOTENV", "").strip().lower() not in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }:
+            values.update(
+                {
+                    key: str(value)
+                    for key, value in dotenv_values(settings.project_root / ".env").items()
+                    if value is not None
+                }
+            )
         values.update({key: value for key, value in os.environ.items() if value is not None})
         run_token = re.sub(r"[^A-Za-z0-9]", "", run_id)[-6:] or "RUN"
         run_phone_suffix = int.from_bytes(

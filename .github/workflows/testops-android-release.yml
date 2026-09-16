@@ -1,0 +1,276 @@
+name: TestOps Android Release
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: testops-android-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  PYTHON_VERSION: "3.12"
+  TESTOPS_REPOSITORY: ZMAX-A/TOP
+  TESTOPS_REVISION: 8cd23d6e20e3b0379729302ff5522064ccc33954
+  PACKAGE_NAME: yanjia-android-appium
+  IMAGE_REPOSITORY: local/yanjia-android-appium
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out immutable Android tag
+        uses: actions/checkout@v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check out pinned TestOps Android adapter
+        uses: actions/checkout@v6.0.2
+        with:
+          repository: ${{ env.TESTOPS_REPOSITORY }}
+          ref: ${{ env.TESTOPS_REVISION }}
+          path: .testops-platform
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v6.2.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Validate immutable release coordinates
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          import re
+          import tomllib
+          from pathlib import Path
+
+          tag = os.environ["GITHUB_REF_NAME"]
+          if re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag) is None:
+              raise SystemExit(f"unsupported release tag: {tag}")
+          version = tag.removeprefix("v")
+          manifest = json.loads(Path("testops-package.json").read_text("utf-8"))
+          project = tomllib.loads(Path("pyproject.toml").read_text("utf-8"))["project"]
+          if manifest.get("name") != os.environ["PACKAGE_NAME"]:
+              raise SystemExit("testops-package.json name does not match PACKAGE_NAME")
+          if manifest.get("version") != version or project.get("version") != version:
+              raise SystemExit("Git tag, package manifest and pyproject versions must match")
+          PY
+
+      - name: Run offline release gates
+        env:
+          YANJIA_IGNORE_DOTENV: "true"
+          TEST_USERNAME: fixture_user
+          TEST_PASSWORD: fixture_password
+          SEEDED_CUSTOMER_PHONE: "00000000000"
+          YANJIA_MUTATION_CUSTOMER_QUERY: "00000000000"
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check -e ".[dev]"
+          python -m ruff check .
+          python -m pyright --pythonpath "$(command -v python)"
+          python -m pytest tests/unit -q
+          python scripts/validate_excel.py test_case.xlsx
+          python scripts/report_android_coverage.py --source step_sheet --fail-on-p0-backlog
+
+      - name: Export allowlisted Android package
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_root="${GITHUB_WORKSPACE}/.testops-release"
+          bundle_root="${release_root}/bundle"
+          rm -rf -- "${release_root}"
+          mkdir -p "${bundle_root}/android" "${bundle_root}/adapter"
+          digest="$(PYTHONPATH=".testops-platform/packages/contracts/src:.testops-platform/runners/android_appium/src" \
+            python .testops-platform/scripts/package_android_appium.py \
+              --source . \
+              --export-to "${bundle_root}/android" | tail -n 1)"
+          [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          cp -R .testops-platform/runners/android_appium/src/. "${bundle_root}/adapter/"
+          printf '%s\n' "${digest}" > "${release_root}/package-source-digest.txt"
+          printf '%s\n' "${TESTOPS_REVISION}" > "${release_root}/testops-adapter-revision.txt"
+          artifact="${release_root}/${PACKAGE_NAME}-${GITHUB_REF_NAME#v}.tar.gz"
+          tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner \
+            -cf "${release_root}/package.tar" -C "${bundle_root}" .
+          gzip -n "${release_root}/package.tar"
+          mv "${release_root}/package.tar.gz" "${artifact}"
+          artifact_digest="sha256:$(sha256sum "${artifact}" | cut -d' ' -f1)"
+          echo "release_root=${release_root}" >> "${GITHUB_OUTPUT}"
+          echo "artifact=${artifact}" >> "${GITHUB_OUTPUT}"
+          echo "artifact_digest=${artifact_digest}" >> "${GITHUB_OUTPUT}"
+          echo "package_digest=${digest}" >> "${GITHUB_OUTPUT}"
+
+      - name: Generate SPDX SBOM
+        uses: anchore/sbom-action@v0.24.0
+        with:
+          path: .testops-release/bundle
+          format: spdx-json
+          output-file: .testops-release/sbom.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Scan SBOM for critical vulnerabilities
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: sbom
+          scan-ref: .testops-release/sbom.spdx.json
+          format: json
+          output: .testops-release/trivy-vulnerability-report.json
+          severity: CRITICAL
+          exit-code: "1"
+
+      - name: Build provenance statement
+        env:
+          ARTIFACT_DIGEST: ${{ steps.package.outputs.artifact_digest }}
+          PACKAGE_DIGEST: ${{ steps.package.outputs.package_digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          release_root = Path(".testops-release")
+          artifact = next(release_root.glob("yanjia-android-appium-*.tar.gz"))
+          statement = {
+              "_type": "https://in-toto.io/Statement/v1",
+              "subject": [{
+                  "name": artifact.name,
+                  "digest": {"sha256": os.environ["ARTIFACT_DIGEST"].removeprefix("sha256:")},
+              }],
+              "predicateType": "https://slsa.dev/provenance/v1",
+              "predicate": {
+                  "buildDefinition": {
+                      "buildType": "https://github.com/ZMAX-A/APP/testops-android-package/v1",
+                      "externalParameters": {
+                          "source": f"https://github.com/{os.environ['GITHUB_REPOSITORY']}",
+                          "ref": os.environ["GITHUB_REF"],
+                          "testops_revision": os.environ["TESTOPS_REVISION"],
+                      },
+                      "resolvedDependencies": [{
+                          "uri": f"git+https://github.com/{os.environ['GITHUB_REPOSITORY']}@{os.environ['GITHUB_SHA']}",
+                          "digest": {"gitCommit": os.environ["GITHUB_SHA"]},
+                      }, {
+                          "uri": f"git+https://github.com/{os.environ['TESTOPS_REPOSITORY']}@{os.environ['TESTOPS_REVISION']}",
+                          "digest": {"gitCommit": os.environ["TESTOPS_REVISION"]},
+                      }],
+                  },
+                  "runDetails": {
+                      "builder": {
+                          "id": (
+                              f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/actions/runs/"
+                              f"{os.environ['GITHUB_RUN_ID']}/attempts/{os.environ['GITHUB_RUN_ATTEMPT']}"
+                          )
+                      },
+                      "metadata": {"invocationId": os.environ["GITHUB_RUN_ID"]},
+                  },
+                  "packageSourceDigest": os.environ["PACKAGE_DIGEST"],
+              },
+          }
+          output = release_root / "provenance.intoto.json"
+          output.write_text(json.dumps(statement, sort_keys=True, separators=(",", ":")), "utf-8")
+          PY
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v4.1.2
+        with:
+          cosign-release: v3.1.3
+
+      - name: Sign release evidence with GitHub OIDC
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_root="${{ steps.package.outputs.release_root }}"
+          cosign sign-blob --yes --bundle "${release_root}/package.sigstore-bundle.json" \
+            "${{ steps.package.outputs.artifact }}"
+          cosign sign-blob --yes --bundle "${release_root}/provenance.sigstore-bundle.json" \
+            "${release_root}/provenance.intoto.json"
+          cosign sign-blob --yes --bundle "${release_root}/sbom.sigstore-bundle.json" \
+            "${release_root}/sbom.spdx.json"
+          cosign sign-blob --yes --bundle "${release_root}/vulnerability-report.sigstore-bundle.json" \
+            "${release_root}/trivy-vulnerability-report.json"
+
+      - name: Build signed release manifest
+        env:
+          ARTIFACT_DIGEST: ${{ steps.package.outputs.artifact_digest }}
+          PACKAGE_DIGEST: ${{ steps.package.outputs.package_digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path(".testops-release")
+          def digest(name: str) -> str:
+              return "sha256:" + hashlib.sha256((root / name).read_bytes()).hexdigest()
+
+          document = {
+              "schema_version": "1.0",
+              "automation_package": {
+                  "name": os.environ["PACKAGE_NAME"],
+                  "version": os.environ["GITHUB_REF_NAME"].removeprefix("v"),
+                  "runner_type": "ANDROID_APPIUM",
+                  "image_repository": os.environ["IMAGE_REPOSITORY"],
+                  "digest": os.environ["PACKAGE_DIGEST"],
+              },
+              "source": {
+                  "repository": f"https://github.com/{os.environ['GITHUB_REPOSITORY']}",
+                  "tag": os.environ["GITHUB_REF_NAME"],
+                  "revision": os.environ["GITHUB_SHA"],
+                  "workflow_identity": (
+                      f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/.github/workflows/"
+                      f"testops-android-release.yml@refs/tags/{os.environ['GITHUB_REF_NAME']}"
+                  ),
+                  "builder_id": (
+                      f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/actions/runs/"
+                      f"{os.environ['GITHUB_RUN_ID']}/attempts/{os.environ['GITHUB_RUN_ATTEMPT']}"
+                  ),
+              },
+              "evidence": {
+                  "artifact_digest": os.environ["ARTIFACT_DIGEST"],
+                  "signature_bundle_digest": digest("package.sigstore-bundle.json"),
+                  "provenance_digest": digest("provenance.intoto.json"),
+                  "sbom_digest": digest("sbom.spdx.json"),
+                  "vulnerability_report_digest": digest("trivy-vulnerability-report.json"),
+              },
+          }
+          (root / "testops-android-release.json").write_text(
+              json.dumps(document, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+              "utf-8",
+          )
+          PY
+
+      - name: Create immutable GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_root="${{ steps.package.outputs.release_root }}"
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            echo "Release ${GITHUB_REF_NAME} already exists; refusing to replace immutable assets." >&2
+            exit 1
+          fi
+          gh release create "${GITHUB_REF_NAME}" "${release_root}"/* \
+            --verify-tag \
+            --title "YanJia Android ${GITHUB_REF_NAME}" \
+            --notes "Immutable TestOps Android package, signed provenance, SBOM and vulnerability evidence."
