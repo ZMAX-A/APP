@@ -19,6 +19,11 @@ env:
   TESTOPS_REVISION: 8cd23d6e20e3b0379729302ff5522064ccc33954
   PACKAGE_NAME: yanjia-android-appium
   IMAGE_REPOSITORY: local/yanjia-android-appium
+  YANJIA_IGNORE_DOTENV: "true"
+  TEST_USERNAME: fixture_user
+  TEST_PASSWORD: fixture_password
+  SEEDED_CUSTOMER_PHONE: "00000000000"
+  YANJIA_MUTATION_CUSTOMER_QUERY: "00000000000"
 
 jobs:
   release:
@@ -69,20 +74,34 @@ jobs:
               raise SystemExit("Git tag, package manifest and pyproject versions must match")
           PY
 
-      - name: Run offline release gates
-        env:
-          YANJIA_IGNORE_DOTENV: "true"
-          TEST_USERNAME: fixture_user
-          TEST_PASSWORD: fixture_password
-          SEEDED_CUSTOMER_PHONE: "00000000000"
-          YANJIA_MUTATION_CUSTOMER_QUERY: "00000000000"
+      - name: Install release dependencies
         shell: bash
         run: |
           set -euo pipefail
           python -m pip install --disable-pip-version-check -e ".[dev]"
+
+      - name: Run Ruff
+        shell: bash
+        run: |
+          set -euo pipefail
           python -m ruff check .
+
+      - name: Run Pyright
+        shell: bash
+        run: |
+          set -euo pipefail
           python -m pyright --pythonpath "$(command -v python)"
+
+      - name: Run unit tests
+        shell: bash
+        run: |
+          set -euo pipefail
           python -m pytest tests/unit -q
+
+      - name: Validate Excel catalog and Android coverage
+        shell: bash
+        run: |
+          set -euo pipefail
           python scripts/validate_excel.py test_case.xlsx
           python scripts/report_android_coverage.py --source step_sheet --fail-on-p0-backlog
 

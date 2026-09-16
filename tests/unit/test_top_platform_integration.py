@@ -35,7 +35,7 @@ def test_testops_package_manifest_matches_android_runner() -> None:
     assert manifest == {
         "schema_version": "1.0",
         "name": "yanjia-android-appium",
-        "version": "1.0.1",
+        "version": "1.0.2",
         "runner_type": "ANDROID_APPIUM",
         "entrypoint": "scripts/run-excel.ps1",
         "workbook": "test_case.xlsx",
