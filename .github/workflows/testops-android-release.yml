@@ -113,7 +113,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          release_root="${GITHUB_WORKSPACE}/.testops-release"
+          release_root="${RUNNER_TEMP}/testops-release"
           bundle_root="${release_root}/bundle"
           rm -rf -- "${release_root}"
           mkdir -p "${bundle_root}/android" "${bundle_root}/adapter"
@@ -140,9 +140,9 @@ jobs:
         if: github.event_name == 'push'
         uses: anchore/sbom-action@v0.24.0
         with:
-          path: .testops-release/bundle
+          path: ${{ runner.temp }}/testops-release/bundle
           format: spdx-json
-          output-file: .testops-release/sbom.spdx.json
+          output-file: ${{ runner.temp }}/testops-release/sbom.spdx.json
           upload-artifact: false
           upload-release-assets: false
 
@@ -151,9 +151,9 @@ jobs:
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: sbom
-          scan-ref: .testops-release/sbom.spdx.json
+          scan-ref: ${{ runner.temp }}/testops-release/sbom.spdx.json
           format: json
-          output: .testops-release/trivy-vulnerability-report.json
+          output: ${{ runner.temp }}/testops-release/trivy-vulnerability-report.json
           severity: CRITICAL
           exit-code: "1"
 
@@ -171,7 +171,7 @@ jobs:
           import os
           from pathlib import Path
 
-          release_root = Path(".testops-release")
+          release_root = Path(os.environ["RUNNER_TEMP"]) / "testops-release"
           artifact = next(release_root.glob("yanjia-android-appium-*.tar.gz"))
           statement = {
               "_type": "https://in-toto.io/Statement/v1",
@@ -247,7 +247,7 @@ jobs:
           import os
           from pathlib import Path
 
-          root = Path(".testops-release")
+          root = Path(os.environ["RUNNER_TEMP"]) / "testops-release"
           def digest(name: str) -> str:
               return "sha256:" + hashlib.sha256((root / name).read_bytes()).hexdigest()
 
