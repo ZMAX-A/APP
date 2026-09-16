@@ -10,6 +10,17 @@ from uuid import uuid4
 
 import pytest
 
+from yanjia_automation.excel.variables import VariableResolver
+
+
+def test_multiline_secret_fragments_survive_pytest_prefixing() -> None:
+    secret = "distinctive-sensitive-prefix\\'\"\n中文"
+    resolver = VariableResolver({"YANJIA_AUDIT_SECRET": secret}, sensitive_values={secret})
+
+    rendered = "ValueError: distinctive-sensitive-prefix\\'\"\nE       中文"
+
+    assert "distinctive-sensitive-prefix" not in resolver.redact(rendered)
+
 
 @pytest.mark.parametrize("suffix", ["", "\\'\"\n中文"])
 def test_real_pytest_and_allure_scrub_nested_exceptions_and_captured_output(

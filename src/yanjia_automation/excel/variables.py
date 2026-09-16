@@ -22,9 +22,11 @@ class VariableResolver:
     def __init__(self, values: dict[str, str], *, sensitive_values: set[str]) -> None:
         self._values = values
         # Tracebacks render locals with repr(), while JSON may escape quotes,
-        # backslashes and non-ASCII characters. Redact those representations too.
+        # backslashes and non-ASCII characters. Pytest also prefixes continuation
+        # lines in rendered exceptions, so retain sufficiently distinctive
+        # multiline fragments in addition to each complete representation.
         self._sensitive_values = {
-            representation
+            fragment
             for value in sensitive_values
             if value
             for representation in (
@@ -33,6 +35,7 @@ class VariableResolver:
                 json.dumps(value, ensure_ascii=False)[1:-1],
                 json.dumps(value, ensure_ascii=True)[1:-1],
             )
+            for fragment in _redaction_fragments(representation)
         }
 
     @classmethod
@@ -138,3 +141,9 @@ class VariableResolver:
     def available_names(self) -> frozenset[str]:
         """Return configured variable names without exposing their values."""
         return frozenset(self._values)
+
+
+def _redaction_fragments(value: str) -> set[str]:
+    fragments = {value}
+    fragments.update(line for line in value.splitlines() if len(line) >= 8)
+    return fragments
