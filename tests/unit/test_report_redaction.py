@@ -72,13 +72,23 @@ def test_teardown(failed_teardown):
     assert completed.returncode == 1, completed.stdout + completed.stderr
     files = list(results.iterdir())
     assert any(path.name.endswith("-attachment.txt") for path in files)
-    all_output = completed.stdout + completed.stderr + junit.read_text(encoding="utf-8")
-    all_output += "\n".join(path.read_text(encoding="utf-8") for path in files)
-    for representation in (
+    components = {
+        "pytest stdout": completed.stdout,
+        "pytest stderr": completed.stderr,
+        "JUnit XML": junit.read_text(encoding="utf-8"),
+        **{
+            f"Allure {path.name}": path.read_text(encoding="utf-8")
+            for path in files
+        },
+    }
+    representations = (
         secret, repr(secret)[1:-1], json.dumps(secret)[1:-1],
         json.dumps(secret, ensure_ascii=False)[1:-1],
-    ):
-        assert representation not in all_output
+    )
+    for component_name, content in components.items():
+        for representation in representations:
+            if representation in content:
+                pytest.fail(f"sensitive representation leaked through {component_name}")
     records = [
         json.loads(path.read_text(encoding="utf-8")) for path in results.glob("*-result.json")
     ]
