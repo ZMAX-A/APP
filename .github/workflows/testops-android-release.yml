@@ -17,7 +17,7 @@ concurrency:
 env:
   PYTHON_VERSION: "3.12"
   TESTOPS_REPOSITORY: ZMAX-A/TOP
-  TESTOPS_REVISION: 8cd23d6e20e3b0379729302ff5522064ccc33954
+  TESTOPS_REVISION: 17a80849da10a56273b5570517692b7568d53cfe
   PACKAGE_NAME: yanjia-android-appium
   IMAGE_REPOSITORY: local/yanjia-android-appium
   YANJIA_IGNORE_DOTENV: "true"
@@ -120,9 +120,14 @@ jobs:
           digest="$(PYTHONPATH=".testops-platform/packages/contracts/src:.testops-platform/runners/android_appium/src" \
             python .testops-platform/scripts/package_android_appium.py \
               --source . \
+              --adapter-root .testops-platform/runners/android_appium/src \
               --export-to "${bundle_root}/android" | tail -n 1)"
           [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
           cp -R .testops-platform/runners/android_appium/src/. "${bundle_root}/adapter/"
+          exported_digest="$(python .testops-platform/scripts/package_android_appium.py \
+            --source "${bundle_root}/android" \
+            --adapter-root "${bundle_root}/adapter" | tail -n 1)"
+          [[ "${exported_digest}" == "${digest}" ]]
           printf '%s\n' "${digest}" > "${release_root}/package-source-digest.txt"
           printf '%s\n' "${TESTOPS_REVISION}" > "${release_root}/testops-adapter-revision.txt"
           artifact="${release_root}/${PACKAGE_NAME}-${GITHUB_REF_NAME#v}.tar.gz"
