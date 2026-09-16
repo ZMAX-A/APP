@@ -648,6 +648,7 @@ def test_variable_resolver_inherits_credentials_for_empty_test_aliases(
     for name in (
         "YANJIA_USERNAME",
         "YANJIA_PASSWORD",
+        "YANJIA_IGNORE_DOTENV",
         "TEST_USERNAME",
         "TEST_PASSWORD",
     ):

@@ -21,6 +21,16 @@ class ReportRedactor:
     def pytest_runtest_makereport(self) -> Generator[None, Any, None]:
         # Exit before the Allure wrapper consumes captured output and the report.
         report = (yield).get_result()
+        self._redact_pytest_report(report)
+
+    @pytest.hookimpl(tryfirst=True)
+    def pytest_runtest_logreport(self, report: pytest.TestReport) -> None:
+        # Linux terminal reporters can render the report after makereport wrappers
+        # have completed. Scrub again at the last shared boundary before plugins
+        # consume it; redaction is idempotent.
+        self._redact_pytest_report(report)
+
+    def _redact_pytest_report(self, report: pytest.TestReport) -> None:
         if report.longrepr is not None:
             original = report.longreprtext
             redacted = self.variables.redact(original)
