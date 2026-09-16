@@ -296,7 +296,23 @@ jobs:
             echo "Release ${GITHUB_REF_NAME} already exists; refusing to replace immutable assets." >&2
             exit 1
           fi
-          gh release create "${GITHUB_REF_NAME}" "${release_root}"/* \
+          assets=(
+            "${release_root}/${PACKAGE_NAME}-${GITHUB_REF_NAME#v}.tar.gz"
+            "${release_root}/package-source-digest.txt"
+            "${release_root}/testops-adapter-revision.txt"
+            "${release_root}/sbom.spdx.json"
+            "${release_root}/trivy-vulnerability-report.json"
+            "${release_root}/provenance.intoto.json"
+            "${release_root}/package.sigstore-bundle.json"
+            "${release_root}/provenance.sigstore-bundle.json"
+            "${release_root}/sbom.sigstore-bundle.json"
+            "${release_root}/vulnerability-report.sigstore-bundle.json"
+            "${release_root}/testops-android-release.json"
+          )
+          for asset in "${assets[@]}"; do
+            [[ -f "${asset}" ]] || { echo "Missing release asset: ${asset}" >&2; exit 1; }
+          done
+          gh release create "${GITHUB_REF_NAME}" "${assets[@]}" \
             --verify-tag \
             --title "YanJia Android ${GITHUB_REF_NAME}" \
             --notes "Immutable TestOps Android package, signed provenance, SBOM and vulnerability evidence."
