@@ -4,6 +4,7 @@ from dataclasses import replace
 from unittest.mock import Mock
 
 import pytest
+from selenium.common.exceptions import TimeoutException
 
 from scripts.prepare_excel import CURRENT_STEPS
 from yanjia_automation.config import load_settings
@@ -340,3 +341,75 @@ def test_runner_delegates_only_guarded_tail_to_tag_restoration(
     flow.restoration_session.assert_called_once_with("image")
     run_steps.assert_called_once_with(case, case.steps[-5:])
     assert events == ["restore", "verify"]
+
+
+class SnapshotPollingWait:
+    def __init__(self, driver, timeout) -> None:
+        self.driver = driver
+        del timeout
+
+    def until(self, condition):
+        for _ in range(8):
+            result = condition(self.driver)
+            if result:
+                return result
+        raise TimeoutException("snapshot did not settle")
+
+
+def test_initial_tag_snapshot_waits_for_consistent_text_and_controls(monkeypatch) -> None:
+    monkeypatch.setattr(tag_mutation_module, "WebDriverWait", SnapshotPollingWait)
+    flow = DedicatedTagMutationFlow(Mock(), load_settings())
+    complete = TagSnapshot(("a", "b"), 2, 1)
+    flow._snapshot = Mock(
+        side_effect=[TagSnapshot(("a",), 2, 1), complete, complete]
+    )
+    assert flow._stable_snapshot() == complete
+    assert flow._snapshot.call_count == 3
+
+
+def test_new_tag_assertion_waits_for_addition_even_when_old_tag_is_first(monkeypatch) -> None:
+    monkeypatch.setattr(tag_mutation_module, "WebDriverWait", SnapshotPollingWait)
+    flow = DedicatedTagMutationFlow(Mock(), load_settings())
+    before = TagSnapshot(("old",), 1, 0)
+    after = TagSnapshot(("old", "·new-label"), 2, 1)
+    flow._snapshot = Mock(side_effect=[before, TagSnapshot(("old",), 2, 1), after, after])
+    flow.assert_created_tag(before, "new-label", timeout=10)
+    assert flow._snapshot.call_count == 4
+
+
+@pytest.mark.parametrize(
+    "current",
+    [
+        TagSnapshot(("·expected-label",), 1, 0),
+        TagSnapshot(("·expected-label", "wrong"), 2, 1),
+        TagSnapshot(("·expected-label", "expected-label", "extra"), 3, 2),
+        TagSnapshot(("expected-label",), 1, 1),
+    ],
+)
+def test_new_tag_assertion_rejects_existing_matches_and_unsafe_deltas(
+    monkeypatch, current
+) -> None:
+    monkeypatch.setattr(tag_mutation_module, "WebDriverWait", SnapshotPollingWait)
+    flow = DedicatedTagMutationFlow(Mock(), load_settings())
+    before = TagSnapshot(("·expected-label",), 1, 0)
+    flow._snapshot = Mock(return_value=current)
+    with pytest.raises(AssertionError, match="exactly one new tag"):
+        flow.assert_created_tag(before, "expected-label", timeout=10)
+
+
+def test_guarded_tag_assertion_checks_collection_instead_of_first_element() -> None:
+    settings = load_settings()
+    driver = Mock()
+    runner = ExcelCaseRunner(driver, settings, VariableResolver({}, sensitive_values=set()))
+    flow = Mock(spec=DedicatedTagMutationFlow)
+    snapshot = TagSnapshot(("old",), 1, 0)
+    runner._active_tag_mutation = (flow, snapshot)
+    step = replace(
+        _step(1, "assert"),
+        locator=f"id={settings.app_package}:id/a_records_remark_tag_tv",
+        assertion="text_contains",
+        expected="new-label",
+    )
+    runner._assert_step(_tag_case(), step)
+    flow.assert_created_tag.assert_called_once_with(snapshot, "new-label", timeout=step.timeout)
+    driver.find_element.assert_not_called()

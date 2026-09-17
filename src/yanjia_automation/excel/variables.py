@@ -61,7 +61,8 @@ class VariableResolver:
                 }
             )
         values.update({key: value for key, value in os.environ.items() if value is not None})
-        run_token = re.sub(r"[^A-Za-z0-9]", "", run_id)[-6:] or "RUN"
+        # TOP appends a fixed round suffix; suffix slicing aliases unrelated Runs.
+        run_token = sha256(run_id.encode("utf-8")).hexdigest()[:10]
         run_phone_suffix = int.from_bytes(
             sha256(run_id.encode("utf-8")).digest()[:4], "big"
         ) % 1_000_000

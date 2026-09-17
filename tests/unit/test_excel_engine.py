@@ -685,14 +685,35 @@ def test_offline_variable_resolver_does_not_require_credentials(tmp_path: Path) 
     )
 
     assert resolver.resolve("${RUN_ID}") == "VALIDATION"
-    assert resolver.resolve("${RUN_TOKEN}") == "DATION"
+    run_token = resolver.resolve("${RUN_TOKEN}")
+    assert run_token is not None and len(run_token) == 10 and run_token.isalnum()
     run_phone = resolver.resolve("${RUN_PHONE}")
     assert run_phone is not None and len(run_phone) == 11 and run_phone.isdigit()
     assert run_phone.startswith("13900")
     assert resolver.resolve("${INVALID_USERNAME}") == "__invalid_yanjia_user__"
     assert resolver.resolve("${INVALID_PASSWORD}") == "__invalid_yanjia_password__"
-    assert resolver.resolve("${NON_EXISTENT_CASE_TAG}") == "__missing_case_tag_DATION__"
+    assert resolver.resolve("${NON_EXISTENT_CASE_TAG}") == f"__missing_case_tag_{run_token}__"
     assert resolver.resolve("${SPACE}") == " "
+
+
+def test_top_round_names_have_distinct_stable_run_markers(tmp_path: Path) -> None:
+    settings = replace(load_settings(), project_root=tmp_path)
+    names = (
+        "4b954377-8a49-4972-bbce-47c09ce29828-round-1",
+        "0d505651-5b6a-43d4-8920-c0b8058a227b-round-1",
+        "0d505651-5b6a-43d4-8920-c0b8058a227b-round-2",
+    )
+    markers = [
+        VariableResolver.from_settings(settings, run_id=name, require_credentials=False).resolve(
+            "${RUN_TOKEN}"
+        )
+        for name in names
+    ]
+    assert len(set(markers)) == len(names)
+    repeated = VariableResolver.from_settings(
+        settings, run_id=names[0], require_credentials=False
+    ).resolve("${RUN_TOKEN}")
+    assert repeated == markers[0]
 
 
 def test_locator_parser() -> None:

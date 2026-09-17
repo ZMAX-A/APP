@@ -670,6 +670,15 @@ class ExcelCaseRunner:
             self._wait_condition(lambda: bool(element.text.strip()), step, "元素文本为空")
         elif assertion in {"text_equals", "text_contains"}:
             target = self._required(expected, "期望文本")
+            if (
+                assertion == "text_contains"
+                and self._active_tag_mutation is not None
+                and parse_locator_candidates(step.locator)
+                == ((AppiumBy.ID, f"{self.settings.app_package}:id/a_records_remark_tag_tv"),)
+            ):
+                flow, snapshot = self._active_tag_mutation
+                flow.assert_created_tag(snapshot, target, timeout=step.timeout)
+                return
             element = self._element(step, require_visible=True)
             compare_text = (
                 (lambda text: text == target)

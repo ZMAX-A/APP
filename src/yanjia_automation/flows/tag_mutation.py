@@ -9,7 +9,7 @@ from typing import Literal, Self
 
 from appium.webdriver.webdriver import WebDriver
 from appium.webdriver.webelement import WebElement
-from selenium.common.exceptions import TimeoutException
+from selenium.common.exceptions import StaleElementReferenceException, TimeoutException
 from selenium.webdriver.support.ui import WebDriverWait
 
 from yanjia_automation.config import Settings
@@ -182,7 +182,7 @@ class DedicatedTagMutationFlow:
         WebDriverWait(self.driver, self.timeout).until(
             lambda current: current.current_activity.endswith(".RecordsRemarkActivity")
         )
-        return self._snapshot()
+        return self._stable_snapshot()
 
     def _has_exact_customer_identifier(self, expected: str) -> bool:
         identifiers = self.customer_list.find_all(self.customer_list.card_identifier)
@@ -199,6 +199,57 @@ class DedicatedTagMutationFlow:
             container_count=len(self.driver.find_elements(*_TAG_CONTAINER)),
             delete_count=len(self.driver.find_elements(*_TAG_DELETE)),
         )
+
+    def _stable_snapshot(self) -> TagSnapshot:
+        """Do not capture the baseline while tag text and controls are still loading."""
+
+        previous: TagSnapshot | None = None
+
+        def settled(_: WebDriver) -> TagSnapshot | Literal[False]:
+            nonlocal previous
+            try:
+                current = self._snapshot()
+            except StaleElementReferenceException:
+                previous = None
+                return False
+            consistent = (
+                len(current.texts) == current.container_count
+                and all(current.texts)
+                and current.delete_count <= current.container_count
+            )
+            stable = consistent and current == previous
+            previous = current if consistent else None
+            return current if stable else False
+
+        return WebDriverWait(self.driver, self.timeout).until(settled)
+
+    def assert_created_tag(
+        self, snapshot: TagSnapshot, expected: str, *, timeout: float
+    ) -> None:
+        """Require a stable one-tag addition; an old matching tag cannot satisfy this."""
+
+        previous: TagSnapshot | None = None
+
+        def created(_: WebDriver) -> bool:
+            nonlocal previous
+            try:
+                current = self._snapshot()
+                display = self._created_display_text(snapshot, current)
+            except (StaleElementReferenceException, TagMutationSafetyError):
+                previous = None
+                return False
+            matches = expected in display
+            stable = matches and current == previous
+            previous = current if matches else None
+            return stable
+
+        try:
+            WebDriverWait(self.driver, timeout).until(created)
+        except TimeoutException as error:
+            raise AssertionError(
+                "Expected exactly one new tag with the current run label; "
+                "existing tags and transient collection states do not prove creation."
+            ) from error
 
     def _restore_tags(self, snapshot: TagSnapshot) -> None:
         self._dismiss_add_dialog()
