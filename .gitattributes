@@ -1,0 +1,2 @@
+# The Windows evidence job and Linux signing job must hash identical lock bytes.
+config/runtime-requirements.lock text eol=lf

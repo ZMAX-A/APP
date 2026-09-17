@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -35,7 +36,9 @@ def test_testops_package_manifest_matches_android_runner() -> None:
     assert manifest == {
         "schema_version": "1.0",
         "name": "yanjia-android-appium",
-        "version": "1.0.9",
+        "version": tomllib.loads((ROOT / "pyproject.toml").read_text("utf-8"))["project"][
+            "version"
+        ],
         "runner_type": "ANDROID_APPIUM",
         "entrypoint": "scripts/run-excel.ps1",
         "workbook": "test_case.xlsx",
@@ -67,4 +70,4 @@ def test_run_excel_accepts_testops_output_isolation_parameters() -> None:
     for parameter in ("[string]$ReportsRoot", "[string]$RunId", "[switch]$IgnoreDotEnv"):
         assert parameter in script
     assert "$env:YANJIA_IGNORE_DOTENV = 'true'" in script
-    assert 'allure-results\\$effectiveRunId' in script
+    assert "allure-results\\$effectiveRunId" in script

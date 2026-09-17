@@ -111,6 +111,14 @@ function Mask-DeviceId([string]$DeviceId) {
 if (-not (Test-Path -LiteralPath $python)) {
     throw "Project virtual environment was not found: $python"
 }
+if ($IgnoreDotEnv) {
+    # TOP runs must match the dependencies covered by the signed Release SBOM.
+    # This check deliberately precedes workbook writes, ADB and Appium access.
+    & $python -I (Join-Path $PSScriptRoot 'runtime_dependencies.py')
+    if ($LASTEXITCODE -ne 0) {
+        throw 'TOP runtime dependency verification failed. Install the signed release runtime before running.'
+    }
+}
 $allureCommand = Get-Command allure -ErrorAction SilentlyContinue
 if ($OpenReport -and -not $allureCommand) {
     throw 'OpenReport requires the Allure command line. Install allure-commandline before running.'

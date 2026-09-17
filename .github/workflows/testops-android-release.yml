@@ -27,7 +27,63 @@ env:
   YANJIA_MUTATION_CUSTOMER_QUERY: "00000000000"
 
 jobs:
+  windows-runtime:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Check out immutable Android revision
+        uses: actions/checkout@v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Windows Python runtime
+        uses: actions/setup-python@v6.2.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          architecture: x64
+
+      - name: Install and verify hash-locked Windows dependencies
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          .\scripts\install-runtime.ps1 -Python (Get-Command python).Source `
+            -EnvironmentPath "$env:RUNNER_TEMP\android-runtime"
+          if ($LASTEXITCODE -ne 0) { throw 'Runtime installation failed.' }
+          $runtimePython = "$env:RUNNER_TEMP\android-runtime\Scripts\python.exe"
+          & $runtimePython -I scripts/runtime_dependencies.py `
+            --output "$env:RUNNER_TEMP\testops-runtime-evidence\runtime-inventory.json" `
+            --source-revision "$env:GITHUB_SHA"
+          if ($LASTEXITCODE -ne 0) { throw 'Runtime inventory failed.' }
+          Copy-Item config/runtime-requirements.lock "$env:RUNNER_TEMP\testops-runtime-evidence\runtime-requirements.lock"
+
+      - name: Test the exact Windows runtime without device access
+        shell: pwsh
+        run: |
+          & "$env:RUNNER_TEMP\android-runtime\Scripts\python.exe" -m pytest tests/unit -q
+          if ($LASTEXITCODE -ne 0) { throw 'Locked Windows unit tests failed.' }
+
+      - name: Generate SPDX SBOM from installed Windows packages
+        uses: anchore/sbom-action@v0.24.0
+        with:
+          path: ${{ runner.temp }}/android-runtime/Lib/site-packages
+          syft-version: v1.42.3
+          format: spdx-json
+          output-file: ${{ runner.temp }}/testops-runtime-evidence/sbom.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Transfer runtime evidence to the signing job
+        uses: actions/upload-artifact@v4.6.2
+        with:
+          name: android-runtime-${{ github.sha }}
+          path: ${{ runner.temp }}/testops-runtime-evidence/*
+          if-no-files-found: error
+          retention-days: 7
+
   release:
+    needs: windows-runtime
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -141,24 +197,37 @@ jobs:
           echo "artifact_digest=${artifact_digest}" >> "${GITHUB_OUTPUT}"
           echo "package_digest=${digest}" >> "${GITHUB_OUTPUT}"
 
-      - name: Generate SPDX SBOM
-        uses: anchore/sbom-action@v0.24.0
+      - name: Download evidence from the exact Windows runtime
+        uses: actions/download-artifact@v4.3.0
         with:
-          path: ${{ runner.temp }}/testops-release/bundle
-          format: spdx-json
-          output-file: ${{ runner.temp }}/testops-release/sbom.spdx.json
-          upload-artifact: false
-          upload-release-assets: false
+          name: android-runtime-${{ github.sha }}
+          path: ${{ runner.temp }}/testops-release
 
-      - name: Scan SBOM for critical vulnerabilities
+      - name: Scan every SBOM dependency and retain all severity levels
         uses: aquasecurity/trivy-action@v0.36.0
         with:
+          version: v0.70.0
           scan-type: sbom
           scan-ref: ${{ runner.temp }}/testops-release/sbom.spdx.json
           format: json
           output: ${{ runner.temp }}/testops-release/trivy-vulnerability-report.json
-          severity: CRITICAL
-          exit-code: "1"
+          list-all-pkgs: "true"
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          exit-code: "0"
+
+      - name: Reject missing dependency coverage and critical vulnerabilities
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_root="${{ steps.package.outputs.release_root }}"
+          cmp config/runtime-requirements.lock "${release_root}/runtime-requirements.lock"
+          python scripts/verify_release_evidence.py \
+            --lock "${release_root}/runtime-requirements.lock" \
+            --inventory "${release_root}/runtime-inventory.json" \
+            --sbom "${release_root}/sbom.spdx.json" \
+            --scan "${release_root}/trivy-vulnerability-report.json" \
+            --source-revision "${GITHUB_SHA}" \
+            --output "${release_root}/dependency-coverage.json"
 
       - name: Build provenance statement
         env:
@@ -208,6 +277,19 @@ jobs:
                       "metadata": {"invocationId": os.environ["GITHUB_RUN_ID"]},
                   },
                   "packageSourceDigest": os.environ["PACKAGE_DIGEST"],
+                  "runtimeDependencies": {
+                      "platform": "win32",
+                      "python": "3.12",
+                      "lockDigest": "sha256:" + hashlib.sha256(
+                          (release_root / "runtime-requirements.lock").read_bytes()
+                      ).hexdigest(),
+                      "inventoryDigest": "sha256:" + hashlib.sha256(
+                          (release_root / "runtime-inventory.json").read_bytes()
+                      ).hexdigest(),
+                      "coverageDigest": "sha256:" + hashlib.sha256(
+                          (release_root / "dependency-coverage.json").read_bytes()
+                      ).hexdigest(),
+                  },
               },
           }
           output = release_root / "provenance.intoto.json"
@@ -281,6 +363,9 @@ jobs:
                   "provenance_digest": digest("provenance.intoto.json"),
                   "sbom_digest": digest("sbom.spdx.json"),
                   "vulnerability_report_digest": digest("trivy-vulnerability-report.json"),
+                  "runtime_lock_digest": digest("runtime-requirements.lock"),
+                  "runtime_inventory_digest": digest("runtime-inventory.json"),
+                  "dependency_coverage_digest": digest("dependency-coverage.json"),
               },
           }
           (root / "testops-android-release.json").write_text(
@@ -313,6 +398,9 @@ jobs:
             "${release_root}/sbom.sigstore-bundle.json"
             "${release_root}/vulnerability-report.sigstore-bundle.json"
             "${release_root}/testops-android-release.json"
+            "${release_root}/runtime-requirements.lock"
+            "${release_root}/runtime-inventory.json"
+            "${release_root}/dependency-coverage.json"
           )
           for asset in "${assets[@]}"; do
             [[ -f "${asset}" ]] || { echo "Missing release asset: ${asset}" >&2; exit 1; }

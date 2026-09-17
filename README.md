@@ -4,6 +4,8 @@
 
 当前自动化项目正式版本：`1.0.0`。
 
+当前开发候选版本：`1.0.10`，修复 TOP 发布的依赖 SBOM 与漏洞扫描覆盖。候选版本不代表已发布或已通过 TOP 实机验收。
+
 当前实机基线：
 
 - 包名：`com.xiaofutech.yanjia_ai`
@@ -21,6 +23,8 @@ V1.0.0 发布门禁：2026-09-10 在上述设备和应用版本完成 Run `20260
 项目通过根目录的 `testops-package.json` 声明 `ANDROID_APPIUM` 运行包。TOP 的 Windows 设备 Worker 使用 `scripts/run-excel.ps1` 按精确用例 ID 执行，并通过 `-ReportsRoot`、`-RunId` 将 Allure 与日志写入平台 Run 工作区。平台运行固定启用 `-NoWriteBack -SkipExcelValidation -IgnoreDotEnv`：不修改源工作簿、不加载项目本地 `.env`，账号密码和专用客户查询只能由 TOP Secret Binding 注入。
 
 APPium/ADB 仍运行在连接真机的 Windows Worker 上；TOP 控制平面只保存不可变基线、运行快照、进度和脱敏结果。写入与删除用例继续执行唯一客户预检和显式授权门禁，只读偶发失败只允许在 30 秒后复跑一次。
+
+正式 Release 使用 `config/runtime-requirements.lock` 锁定 Windows x64 CPython 3.12 的完整 Python 依赖及 wheel SHA-256。在新 Release 的 `android/` 目录运行 `scripts/install-runtime.ps1` 创建独立 `.venv`；TOP 每次运行前检查安装包集合和版本，依赖漂移时在 ADB/Appium/工作簿操作之前拒绝执行。参见 [正式依赖与发布流程](docs/runtime-release.md)。
 
 ## 已自动化的只读路径
 
