@@ -3,12 +3,10 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from math import hypot
 from types import TracebackType
 from typing import Literal, Self
 
 from appium.webdriver.webdriver import WebDriver
-from appium.webdriver.webelement import WebElement
 from selenium.common.exceptions import StaleElementReferenceException, TimeoutException
 from selenium.webdriver.support.ui import WebDriverWait
 
@@ -330,18 +328,19 @@ class DedicatedTagMutationFlow:
             raise TagMutationSafetyError(
                 "Generated tag display text is not uniquely identifiable."
             )
-        delete_buttons = self.driver.find_elements(*_TAG_DELETE)
-        if not delete_buttons:
-            raise TagMutationSafetyError("Generated tag has no delete control.")
-        text_x, text_y = _center(matching_texts[0])
-        delete_button = min(
-            delete_buttons,
-            key=lambda element: hypot(
-                _center(element)[0] - text_x,
-                _center(element)[1] - text_y,
-            ),
-        )
-        delete_button.click()
+        # Wrapped rows make a neighbouring tag's button geometrically closer.
+        # Establish ownership through the tag container, never screen distance.
+        owners = []
+        for container in self.driver.find_elements(*_TAG_CONTAINER):
+            texts = container.find_elements(*_TAG_TEXT)
+            if len(texts) == 1 and str(texts[0].get_attribute("text") or "") == display_text:
+                owners.append(container)
+        if len(owners) != 1:
+            raise TagMutationSafetyError("Generated tag container is not uniquely identifiable.")
+        delete_buttons = owners[0].find_elements(*_TAG_DELETE)
+        if len(delete_buttons) != 1:
+            raise TagMutationSafetyError("Generated tag container has no unique delete control.")
+        delete_buttons[0].click()
         WebDriverWait(self.driver, self.timeout).until(
             lambda current: current.find_elements(*_DELETE_CONFIRM)
         )
@@ -358,11 +357,3 @@ class DedicatedTagMutationFlow:
         WebDriverWait(self.driver, self.timeout).until(
             lambda current: current.current_activity.endswith(".CustomerDetailActivity")
         )
-
-
-def _center(element: WebElement) -> tuple[float, float]:
-    rect = element.rect
-    return (
-        float(rect["x"]) + float(rect["width"]) / 2,
-        float(rect["y"]) + float(rect["height"]) / 2,
-    )

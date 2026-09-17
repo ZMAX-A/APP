@@ -413,3 +413,53 @@ def test_guarded_tag_assertion_checks_collection_instead_of_first_element() -> N
     runner._assert_step(_tag_case(), step)
     flow.assert_created_tag.assert_called_once_with(snapshot, "new-label", timeout=step.timeout)
     driver.find_element.assert_not_called()
+
+
+def _delete_fixture(monkeypatch, *, own_button_count=1, owner_count=1):
+    monkeypatch.setattr(tag_mutation_module, "WebDriverWait", SnapshotPollingWait)
+    text = Mock()
+    text.get_attribute.return_value = "#generated"
+    text.rect = {"x": 719, "y": 1047, "width": 445, "height": 70}
+    neighbour_text = Mock()
+    neighbour_text.get_attribute.return_value = "#original"
+    own_button, neighbour_button, confirm = Mock(), Mock(), Mock()
+    # The old distance heuristic chooses this neighbouring row's button.
+    own_button.rect = {"x": 1169, "y": 1047, "width": 70, "height": 70}
+    neighbour_button.rect = {"x": 914, "y": 1136, "width": 70, "height": 70}
+    owner, neighbour = Mock(), Mock()
+    owner.find_elements.side_effect = lambda *locator: (
+        [text] if locator == tag_mutation_module._TAG_TEXT else [own_button]*own_button_count
+    )
+    neighbour.find_elements.side_effect = lambda *locator: (
+        [neighbour_text] if locator == tag_mutation_module._TAG_TEXT else [neighbour_button]
+    )
+    rows = {
+        tag_mutation_module._TAG_TEXT: [text, neighbour_text],
+        tag_mutation_module._TAG_CONTAINER: [owner]*owner_count+[neighbour],
+        tag_mutation_module._TAG_DELETE: [own_button, neighbour_button],
+        tag_mutation_module._DELETE_CONFIRM: [confirm],
+    }
+    driver = Mock()
+    driver.find_elements.side_effect = lambda *locator: rows[locator]
+    flow = DedicatedTagMutationFlow(driver, load_settings())
+    return flow, own_button, neighbour_button, confirm
+
+
+def test_delete_uses_owner_container_when_neighbour_button_is_closer(monkeypatch) -> None:
+    flow, own, neighbour, confirm = _delete_fixture(monkeypatch)
+    flow._delete_exact_display_tag("#generated")
+    own.click.assert_called_once_with()
+    neighbour.click.assert_not_called()
+    confirm.click.assert_called_once_with()
+
+
+@pytest.mark.parametrize("buttons, owners", [(0, 1), (2, 1), (1, 0), (1, 2)])
+def test_delete_refuses_ambiguous_or_missing_owned_controls(monkeypatch, buttons, owners) -> None:
+    flow, own, neighbour, confirm = _delete_fixture(
+        monkeypatch, own_button_count=buttons, owner_count=owners
+    )
+    with pytest.raises(TagMutationSafetyError, match="container"):
+        flow._delete_exact_display_tag("#generated")
+    own.click.assert_not_called()
+    neighbour.click.assert_not_called()
+    confirm.click.assert_not_called()
